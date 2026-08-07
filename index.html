@@ -2377,21 +2377,36 @@ function renderDraft() {
   var plan = size.slots[slot];
   if (!plan) return;
 
-  var opening = '';
-  for (var r = 0; r < plan.opening.length; r++) {
-    opening += '<span class="chip ' + plan.opening[r] + '">' + plan.opening[r] + '</span>';
+  // Named strategies are CONSTRAINTS on taking the best available value, so none of
+  // them can beat it and there is no "winning" strategy to crown. What varies, and what
+  // a drafter can act on, is how much each commitment costs from their particular seat.
+  var list = plan.strategies || [];
+  var rank = '<table><thead><tr><th class="l">Strategy</th><th>Costs you</th>'
+    + '<th class="l">From pick ' + slot + '</th></tr></thead><tbody>';
+  for (var s = 0; s < list.length; s++) {
+    var row = list[s];
+    var freeish = row.verdict === 'free' || row.verdict === 'same picks';
+    var note = row.verdict === 'same picks'
+      ? 'what best value does here anyway'
+      : row.verdict === 'free' ? 'costs nothing you can measure'
+      : row.verdict === 'slight cost' ? 'playable, slightly behind'
+      : 'meaningfully worse from this seat';
+    rank += '<tr><td class="l"><b>' + esc(row.name) + '</b></td>'
+      + '<td>' + (freeish ? '<span class="tag good">free</span>'
+                          : '&minus;' + row.cost.toFixed(0))
+      + '</td><td class="l"><span class="slot">' + note + '</span></td></tr>';
   }
+  rank += '</tbody></table>';
+
   document.getElementById('draftPlan').innerHTML =
-    '<p class="total">' + plan.strategy + ' <span>from pick ' + slot
-      + ' in a ' + teams + '-team league</span></p>'
-    + '<p style="margin:6px 0 12px">Rounds 1–5: ' + opening + '</p>'
-    + '<table><tbody>'
-    + '<tr><td class="l">Projected season points</td><td><b>' + plan.points.toFixed(0) + '</b></td></tr>'
-    + '<tr><td class="l">Edge over drafting pure value</td><td><b>' + (plan.edge >= 0 ? '+' : '')
-      + plan.edge.toFixed(0) + '</b> pts'
-      + (Math.abs(plan.edge) < 15 ? ' <span class="tag">within noise</span>' : '')
-      + '</td></tr>'
-    + '</tbody></table>'
+    '<p class="total">' + plan.best.toFixed(0)
+      + ' <span>season points from pick ' + slot + ' in a ' + teams
+      + '-team league, taking the best available value</span></p>'
+    + rank
+    + '<div class="note">Every strategy below is a rule that removes options, so none '
+      + 'can beat simply taking the best value on the board. The number is what '
+      + 'committing to it costs against the same opponents. Averaged over simulated '
+      + 'drafts where the room scatters around consensus ADP.</div>'
     + '<div class="note">' + esc(size.notes[plan.group] || '') + '</div>';
 
   var cliffs = '<table><thead><tr><th class="l">Pos</th><th>Startable</th>'
