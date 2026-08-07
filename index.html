@@ -40,19 +40,20 @@
    */
   :root {
     color-scheme: dark;
-    /* Chrome — a deep indigo field rather than neutral black. */
-    --bg: #0f1320;
-    --bg-glow-1: rgba(88,120,255,.16);
-    --bg-glow-2: rgba(210,90,60,.10);
+    /* Chrome — a night game. The turf pair below is the page field itself, drawn as
+       gradients in the body rule rather than fetched as an image: no request, no
+       licence, crisp at any zoom, and it still works with no network. */
+    --turf: #123020;  --turf-2: #0a1d13;
+    --bg: #0a1710;
     --panel: #16181d;              /* validated data surface — do not change casually */
-    --panel-tint: #1a1f31;         /* decorative card fill */
-    --panel-2: #232a40;
-    --line: #2b3350;
-    --line-soft: #222941;
-    --text: #f2f5ff;    --dim: #98a3c4;    --muted: #7480a0;
-    --accent: #3987e5;             /* sequential blue, step 400 */
-    --accent-2: #7c5cff;
-    --accent-soft: #184f95;
+    --panel-tint: #14261b;         /* decorative card fill */
+    --panel-2: #1c3826;
+    --line: #26482f;
+    --line-soft: #1f3a28;
+    --text: #eef7f0;    --dim: #a3c1ac;    --muted: #82a08c;
+    --accent: #34a85c;             /* sequential green, step 400 */
+    --accent-2: #14958a;
+    --accent-soft: #1a5c33;
     /* Validated categorical hues — see the note above. */
     --pos-rb: #d95926;   --pos-wr: #3987e5;   --pos-te: #199e70;
     --pos-neutral: #9aa5c6;
@@ -75,61 +76,82 @@
   @media (prefers-color-scheme: light) {
     :root:where(:not([data-theme="dark"])) {
       color-scheme: light;
-      --bg: #eef1fa;
-      --bg-glow-1: rgba(90,130,255,.18);
-      --bg-glow-2: rgba(235,104,52,.12);
+      --turf: #3f8b52;  --turf-2: #2c6b3d;
+      --bg: #e7efe6;
       --panel: #fcfcfb;
       --panel-tint: #ffffff;
-      --panel-2: #e8edf9;
-      --line: #d3dcf0;   --line-soft: #e3e9f6;
-      --text: #101528;   --dim: #4d5772;   --muted: #6b7590;
-      --accent: #2a78d6; --accent-2: #6b4df0; --accent-soft: #9ec5f4;
+      --panel-2: #e3ede2;
+      --line: #ccdcc9;   --line-soft: #dfe9dd;
+      --text: #0e1a12;   --dim: #46584b;   --muted: #62755f;
+      --accent: #15803d; --accent-2: #0f766e; --accent-soft: #a3d3ac;
       --pos-rb: #eb6834; --pos-wr: #2a78d6;   --pos-te: #1baf7a;
       --pos-neutral: #4d5772;
     }
   }
   :root[data-theme="light"] {
     color-scheme: light;
-    --bg: #eef1fa;
-    --bg-glow-1: rgba(90,130,255,.18);
-    --bg-glow-2: rgba(235,104,52,.12);
-    --panel: #fcfcfb;  --panel-tint: #ffffff;  --panel-2: #e8edf9;
-    --line: #d3dcf0;   --line-soft: #e3e9f6;
-    --text: #101528;   --dim: #4d5772;   --muted: #6b7590;
-    --accent: #2a78d6; --accent-2: #6b4df0; --accent-soft: #9ec5f4;
+    --turf: #3f8b52;  --turf-2: #2c6b3d;
+    --bg: #e7efe6;
+    --panel: #fcfcfb;  --panel-tint: #ffffff;  --panel-2: #e3ede2;
+    --line: #ccdcc9;   --line-soft: #dfe9dd;
+    --text: #0e1a12;   --dim: #46584b;   --muted: #62755f;
+    --accent: #15803d; --accent-2: #0f766e; --accent-soft: #a3d3ac;
     --pos-rb: #eb6834; --pos-wr: #2a78d6;   --pos-te: #1baf7a;
     --pos-neutral: #4d5772;
   }
   * { box-sizing: border-box; }
+  /* Behind the fixed field, so overscroll rubber-banding shows turf rather than white. */
+  html { background: var(--bg); }
+  /* THE FIELD. Four layers, painted bottom-up in the shorthand below:
+       turf          a vertical gradient, lighter at the top like a lit stadium
+       mowing        alternating 5% bands, the cut pattern groundskeepers leave
+       yard lines    a 2px white line every 10%, at the same rhythm as the mowing
+       daylight      a soft highlight so the top of the page is not a flat slab
+     Every layer is a gradient. No image is fetched, so it costs nothing to load, stays
+     sharp at any zoom, and still renders with no network. Kept low-contrast on purpose:
+     cards sit on top of it and their text must never compete with a stripe. */
   body {
     margin: 0; color: var(--text);
     font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     background:
-      radial-gradient(1100px 620px at 12% -10%, var(--bg-glow-1), transparent 60%),
-      radial-gradient(900px 520px at 92% 0%, var(--bg-glow-2), transparent 55%),
-      var(--bg);
+      radial-gradient(150% 90% at 50% -25%, rgba(255,255,255,.20), transparent 55%),
+      repeating-linear-gradient(90deg,
+        rgba(255,255,255,.17) 0 2px, transparent 2px 10%),
+      repeating-linear-gradient(90deg,
+        rgba(255,255,255,.045) 0 5%, rgba(0,0,0,.05) 5% 10%),
+      linear-gradient(178deg, var(--turf), var(--turf-2));
     background-attachment: fixed;
     min-height: 100vh;
   }
-  header {
-    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
-    padding: 14px 22px 0; border-bottom: 1px solid var(--line);
-    background:
-      linear-gradient(115deg,
-        color-mix(in srgb, var(--accent) 42%, transparent),
-        color-mix(in srgb, var(--accent-2) 34%, transparent) 42%,
-        color-mix(in srgb, var(--pos-rb) 20%, transparent) 78%,
-        transparent), var(--panel-tint);
+  /* A fixed field parallaxes against the content as you scroll. Harmless for most,
+     unpleasant for anyone who asked the OS for less movement. */
+  @media (prefers-reduced-motion: reduce) {
+    body { background-attachment: scroll; }
   }
+  /* The sideline: a dark green bar in BOTH themes, so it carries its own ink rather
+     than the theme's. Inheriting --dim here put #46584b text on dark green in light
+     mode, which is the kind of thing that only shows up on someone else's laptop. */
+  header {
+    --header-ink: #f1faf2;
+    --header-dim: #b9d7c1;
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 14px 22px 0; color: var(--header-ink);
+    border-bottom: 3px solid rgba(255,255,255,.22);
+    background:
+      linear-gradient(107deg, #0d3f22, #14532d 45%, #12614a 100%);
+    box-shadow: 0 8px 22px rgba(0,0,0,.22);
+  }
+  header .meta { color: var(--header-dim); }
   h1 {
     font-size: 20px; margin: 0 0 14px; font-weight: 850; letter-spacing: -.5px;
     display: flex; align-items: center; gap: 9px;
   }
+  /* Gold on green. A green mark on the green bar would disappear into it. */
   h1 .mark {
     display: inline-grid; place-items: center; width: 27px; height: 27px;
     border-radius: 8px; font-size: 15px; line-height: 1;
-    background: linear-gradient(140deg, var(--accent), var(--accent-2));
-    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 45%, transparent);
+    background: linear-gradient(140deg, #f6cd5b, #d99a2b);
+    box-shadow: 0 2px 10px rgba(0,0,0,.35);
   }
   .meta { color: var(--dim); font-size: 12px; margin-bottom: 14px; }
 
@@ -138,26 +160,28 @@
   .tabs { display: flex; gap: 3px; margin-left: auto; flex-wrap: wrap; align-self: flex-end; }
   .tab {
     background: none; border: none; border-bottom: 3px solid transparent;
-    color: var(--dim); padding: 9px 15px 10px; cursor: pointer;
+    color: var(--header-dim); padding: 9px 15px 10px; cursor: pointer;
     font: inherit; font-weight: 650; letter-spacing: .2px;
     border-radius: 8px 8px 0 0; transition: background .14s, color .14s;
   }
-  .tab:hover {
-    color: var(--text);
-    background: color-mix(in srgb, var(--tabhue, var(--accent)) 16%, transparent);
+  .tab:hover, .tab:focus-visible {
+    color: #fff;
+    background: color-mix(in srgb, var(--tabhue, #fff) 22%, transparent);
   }
   .tab[aria-selected="true"] {
-    color: var(--text); font-weight: 800;
-    border-bottom-color: var(--tabhue, var(--accent));
-    background: color-mix(in srgb, var(--tabhue, var(--accent)) 22%, transparent);
+    color: #fff; font-weight: 800;
+    border-bottom-color: var(--tabhue, #fff);
+    background: color-mix(in srgb, var(--tabhue, #fff) 26%, transparent);
   }
-  .tab[data-view="startsit"] { --tabhue: #3987e5; }
-  .tab[data-view="rankings"] { --tabhue: #7c5cff; }
-  .tab[data-view="waivers"]  { --tabhue: #199e70; }
-  .tab[data-view="season"]   { --tabhue: #d98a26; }
-  .tab[data-view="draft"]    { --tabhue: #d95926; }
-  .tab[data-view="roster"]   { --tabhue: #2aa8b8; }
-  .tab[data-view="settings"] { --tabhue: #8d93a8; }
+  /* Lightened for the dark bar. The darker twins of these live on --section below,
+     where the ground is a white card and the contrast requirement is the opposite. */
+  .tab[data-view="startsit"] { --tabhue: #6aa9f0; }
+  .tab[data-view="rankings"] { --tabhue: #a48bff; }
+  .tab[data-view="waivers"]  { --tabhue: #4ecf9a; }
+  .tab[data-view="season"]   { --tabhue: #f0b84e; }
+  .tab[data-view="draft"]    { --tabhue: #f08155; }
+  .tab[data-view="roster"]   { --tabhue: #4fc9d8; }
+  .tab[data-view="settings"] { --tabhue: #bcc4ce; }
   main { padding: 20px; max-width: 1400px; margin: 0 auto; }
   .view[hidden] { display: none; }
   .row { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
@@ -353,10 +377,22 @@
   .note { color: var(--dim); font-size: 12px; margin-top: 8px; }
   .total {
     font-size: 42px; font-weight: 850; letter-spacing: -1.4px;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
     background: linear-gradient(92deg, var(--accent), var(--accent-2));
     -webkit-background-clip: text; background-clip: text; color: transparent;
   }
-  .total span { font-size: 13px; font-weight: 400; color: var(--dim); }
+  /* The caption MUST reset letter-spacing. It was inheriting the -1.4px meant for the
+     42px numeral, which at 13px crushed the words into each other — the whole line
+     read as one condensed smear. Same trap for the gradient text-clip above: without
+     an explicit colour the caption inherits `color: transparent` and vanishes. */
+  .total span {
+    display: inline-block; vertical-align: baseline;
+    margin-left: 11px; max-width: 46ch;
+    font-size: 13.5px; font-weight: 500; line-height: 1.5;
+    letter-spacing: normal; color: var(--dim);
+    -webkit-text-fill-color: var(--dim);
+  }
   .bench td { opacity: .6; }
   tr.nb td { border-bottom: none; padding-bottom: 2px; }
   tr.why td { color: var(--dim); font-size: 12px; padding-top: 0; padding-bottom: 9px;
