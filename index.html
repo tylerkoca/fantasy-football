@@ -102,31 +102,30 @@
   * { box-sizing: border-box; }
   /* Behind the fixed field, so overscroll rubber-banding shows turf rather than white. */
   html { background: var(--bg); }
-  /* THE FIELD. Four layers, painted bottom-up in the shorthand below:
-       turf          a vertical gradient, lighter at the top like a lit stadium
-       mowing        alternating 5% bands, the cut pattern groundskeepers leave
-       yard lines    a 2px white line every 10%, at the same rhythm as the mowing
-       daylight      a soft highlight so the top of the page is not a flat slab
-     Every layer is a gradient. No image is fetched, so it costs nothing to load, stays
-     sharp at any zoom, and still renders with no network. Kept low-contrast on purpose:
-     cards sit on top of it and their text must never compete with a stripe. */
+  /* Transparent, so the fixed field behind it is the thing you see. html carries --bg
+     for overscroll. A background here would not hide the field — negative z-index
+     children paint above their parent's background — but leaving it in invites the
+     next person to wonder which one wins. */
   body {
-    margin: 0; color: var(--text);
+    margin: 0; color: var(--text); background: transparent;
     font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    background:
-      radial-gradient(150% 90% at 50% -25%, rgba(255,255,255,.20), transparent 55%),
-      repeating-linear-gradient(90deg,
-        rgba(255,255,255,.17) 0 2px, transparent 2px 10%),
-      repeating-linear-gradient(90deg,
-        rgba(255,255,255,.045) 0 5%, rgba(0,0,0,.05) 5% 10%),
-      linear-gradient(178deg, var(--turf), var(--turf-2));
-    background-attachment: fixed;
     min-height: 100vh;
   }
-  /* A fixed field parallaxes against the content as you scroll. Harmless for most,
-     unpleasant for anyone who asked the OS for less movement. */
-  @media (prefers-reduced-motion: reduce) {
-    body { background-attachment: scroll; }
+  /* The field sits behind everything, fixed to the viewport. The scrim over it is the
+     part that matters: at full strength the yard numbers competed with card text
+     wherever a card edge fell across one, so a wash of the page colour knocks the whole
+     thing back to a texture you read as turf without reading anything ON it. */
+  .field {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    z-index: -2; pointer-events: none;
+  }
+  .field .turf-a { stop-color: var(--turf); }
+  .field .turf-b { stop-color: var(--turf-2); }
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(150% 95% at 50% -20%, rgba(255,255,255,.14), transparent 55%),
+      color-mix(in srgb, var(--bg) 32%, transparent);
   }
   /* The sideline: a dark green bar in BOTH themes, so it carries its own ink rather
      than the theme's. Inheriting --dim here put #46584b text on dark green in light
@@ -474,6 +473,84 @@
 </style>
 </head>
 <body>
+<!-- THE FIELD, to scale. 1 yard = 10 units, so the viewBox is a real NFL field:
+     120 yards long including two 10-yard end zones, 53.3 yards wide. Yard lines every
+     5 yards, hash marks at 70'9" from each sideline drawn as one dashed line per row
+     rather than 200 separate ticks, and the numbers count 10-20-30-40-50-40-30-20-10
+     the way a real field does — repeating the same number is the thing people notice.
+
+     Inline SVG rather than a data URI so it stays readable and editable, and rather
+     than a photograph so there is nothing to fetch, license or 404. preserveAspectRatio
+     slice is the SVG spelling of background-size: cover. -->
+<svg class="field" viewBox="0 0 1200 533" preserveAspectRatio="xMidYMid slice"
+     aria-hidden="true" focusable="false">
+  <defs>
+    <!-- Stop colours are set in CSS, not here. A var() reference is not substituted
+         inside an SVG presentation attribute, so putting one on stop-color silently
+         renders black. Note also that an XML comment may not contain a double hyphen,
+         which is why no custom property is named in full anywhere in this block. -->
+    <linearGradient id="turf" x1="0" y1="0" x2="0" y2="1">
+      <stop class="turf-a" offset="0"/>
+      <stop class="turf-b" offset="1"/>
+    </linearGradient>
+    <!-- Grass grain. Two octaves is enough to break up the flat fill and cheap enough
+         to rasterise once on a fixed background. -->
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.62" numOctaves="2" seed="7"/>
+      <feColorMatrix type="saturate" values="0"/>
+    </filter>
+    <!-- The cut pattern a mower leaves: alternating 5-yard bands. -->
+    <pattern id="mow" width="100" height="533" patternUnits="userSpaceOnUse">
+      <rect width="50" height="533" fill="#ffffff" opacity=".045"/>
+      <rect x="50" width="50" height="533" fill="#000000" opacity=".05"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="533" fill="url(#turf)"/>
+  <rect width="1200" height="533" fill="url(#mow)"/>
+  <rect width="1200" height="533" filter="url(#grain)" opacity=".07"/>
+
+  <!-- End zones, darker than the field of play. -->
+  <rect width="100" height="533" fill="#000000" opacity=".16"/>
+  <rect x="1100" width="100" height="533" fill="#000000" opacity=".16"/>
+
+  <g stroke="#ffffff" fill="none" opacity=".5">
+    <!-- Sidelines and end lines. -->
+    <rect x="3" y="3" width="1194" height="527" stroke-width="6"/>
+    <!-- Yard lines every 5 yards; the goal lines carry the same weight as the border. -->
+    <g stroke-width="3">
+      <path d="M150 3V530M200 3V530M250 3V530M300 3V530M350 3V530M400 3V530
+               M450 3V530M500 3V530M550 3V530M600 3V530M650 3V530M700 3V530
+               M750 3V530M800 3V530M850 3V530M900 3V530M950 3V530M1000 3V530
+               M1050 3V530"/>
+    </g>
+    <path d="M100 3V530M1100 3V530" stroke-width="6"/>
+    <!-- Hash marks: one dashed line per row, 4-unit tick on a 10-unit (1 yard) pitch. -->
+    <g stroke-width="7" stroke-dasharray="4 6">
+      <path d="M100 235.8H1100"/>
+      <path d="M100 297.5H1100"/>
+    </g>
+  </g>
+
+  <!-- Yard numbers, upright on the near sideline and inverted on the far one. -->
+  <g fill="#ffffff" opacity=".42" font-family="Arial Narrow, Arial, sans-serif"
+     font-size="52" font-weight="700" text-anchor="middle">
+    <g>
+      <text x="200" y="108">10</text><text x="300" y="108">20</text>
+      <text x="400" y="108">30</text><text x="500" y="108">40</text>
+      <text x="600" y="108">50</text><text x="700" y="108">40</text>
+      <text x="800" y="108">30</text><text x="900" y="108">20</text>
+      <text x="1000" y="108">10</text>
+    </g>
+    <g transform="rotate(180 600 266.5)">
+      <text x="200" y="108">10</text><text x="300" y="108">20</text>
+      <text x="400" y="108">30</text><text x="500" y="108">40</text>
+      <text x="600" y="108">50</text><text x="700" y="108">40</text>
+      <text x="800" y="108">30</text><text x="900" y="108">20</text>
+      <text x="1000" y="108">10</text>
+    </g>
+  </g>
+</svg>
 <header>
   <h1><span class="mark" aria-hidden="true">🏈</span>Fantasy Football</h1>
   <span class="meta" id="meta"></span>
