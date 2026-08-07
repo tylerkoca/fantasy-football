@@ -1,0 +1,2687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fantasy Football — Start/Sit</title>
+<style>
+  /*
+   * TWO COLOUR SYSTEMS, doing different jobs. Do not let them bleed into each other.
+   *
+   * CHROME is decorative — page field, cards, header, tabs, buttons. Free to be as
+   * saturated as looks good, because nothing depends on telling two shades apart.
+   *
+   * DATA COLOUR encodes meaning and is computed, not chosen. Position hues were run
+   * through the data-viz six checks against the surface they actually sit on. Only
+   * THREE categorical hues clear the all-pairs gate in both modes; a fourth fails hard
+   * (violet vs blue, ΔE 1.9 under protanopia in dark). So the three go to RB / WR / TE,
+   * the positions that share a FLEX slot and are therefore the ones you choose between.
+   * QB, K and DST own dedicated slots with no competition and take neutral ink. Every
+   * chip also carries its abbreviation, so identity is never colour-alone.
+   *
+   * THE SOLID CHIP SET IS A SEPARATE PALETTE and was validated separately. "A fourth
+   * hue fails" turned out to be a fact about violet, not about four: re-run against the
+   * darkened chip trio, magenta #a3197a PASSES all six checks (normal-vision ΔE 16.1,
+   * CVD 6.6 — inside the 6-8 band that is legal with secondary encoding, which the
+   * always-present abbreviation supplies). So QB gets a hue on chips. The chip fills
+   * are darker than the data hues because white text needs them to be: white on the
+   * bright TE green is 2.82:1, and on the chip green it is 5.33:1.
+   *   validate_palette.py "a63d18,1f5fae,107a55,a3197a" --mode light --surface "#ffffff" --pairs all
+   *
+   * Re-validated after the chrome recolour, against the card surfaces:
+   *   dark  #1a1f31 — ALL PASS (normal-vision ΔE 20.9, CVD 9.4)
+   *   light #ffffff — ALL PASS (normal-vision ΔE 24.0, CVD 9.2); TE green sits at
+   *                   2.82:1 contrast, under the 3:1 bar, and the always-visible
+   *                   abbreviation is the documented relief.
+   *
+   * Re-run after ANY surface change:
+   *   validate_palette.py "d95926,3987e5,199e70" --mode dark  --surface "#1a1f31" --pairs all
+   *   validate_palette.py "eb6834,2a78d6,1baf7a" --mode light --surface "#ffffff" --pairs all
+   */
+  :root {
+    color-scheme: dark;
+    /* Chrome — a deep indigo field rather than neutral black. */
+    --bg: #0f1320;
+    --bg-glow-1: rgba(88,120,255,.16);
+    --bg-glow-2: rgba(210,90,60,.10);
+    --panel: #16181d;              /* validated data surface — do not change casually */
+    --panel-tint: #1a1f31;         /* decorative card fill */
+    --panel-2: #232a40;
+    --line: #2b3350;
+    --line-soft: #222941;
+    --text: #f2f5ff;    --dim: #98a3c4;    --muted: #7480a0;
+    --accent: #3987e5;             /* sequential blue, step 400 */
+    --accent-2: #7c5cff;
+    --accent-soft: #184f95;
+    /* Validated categorical hues — see the note above. */
+    --pos-rb: #d95926;   --pos-wr: #3987e5;   --pos-te: #199e70;
+    --pos-neutral: #9aa5c6;
+    /* SOLID CHIP FILLS, a separate set from the data hues above.
+       A filled pill with white text is the look every fantasy site uses, and the
+       bright data hues cannot carry it: white on #1baf7a is 2.82:1. These are the
+       darkened versions, all >= 5.3:1 for white text, and they are used ONLY on
+       chips — never as a chart mark, where the validated set above still rules.
+       QB is magenta because it is the one fourth hue that passes: violet against
+       the WR blue came out at dE 11.3 for normal vision, worse than useless. */
+    --chip-rb: #a63d18;  --chip-wr: #1f5fae;  --chip-te: #107a55;
+    --chip-qb: #a3197a;  --chip-k: #5a6478;   --chip-dst: #3f4a5f;
+    /* Per-tab accent. Decoration: it tells you which room you are in, and nothing
+       in any table is distinguished by it. */
+    --section: var(--accent);
+    /* Status palette — fixed, never themed. Always paired with a label. */
+    --good: #0ca30c;  --warn: #fab219;  --serious: #ec835a;  --critical: #d03b3b;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:where(:not([data-theme="dark"])) {
+      color-scheme: light;
+      --bg: #eef1fa;
+      --bg-glow-1: rgba(90,130,255,.18);
+      --bg-glow-2: rgba(235,104,52,.12);
+      --panel: #fcfcfb;
+      --panel-tint: #ffffff;
+      --panel-2: #e8edf9;
+      --line: #d3dcf0;   --line-soft: #e3e9f6;
+      --text: #101528;   --dim: #4d5772;   --muted: #6b7590;
+      --accent: #2a78d6; --accent-2: #6b4df0; --accent-soft: #9ec5f4;
+      --pos-rb: #eb6834; --pos-wr: #2a78d6;   --pos-te: #1baf7a;
+      --pos-neutral: #4d5772;
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #eef1fa;
+    --bg-glow-1: rgba(90,130,255,.18);
+    --bg-glow-2: rgba(235,104,52,.12);
+    --panel: #fcfcfb;  --panel-tint: #ffffff;  --panel-2: #e8edf9;
+    --line: #d3dcf0;   --line-soft: #e3e9f6;
+    --text: #101528;   --dim: #4d5772;   --muted: #6b7590;
+    --accent: #2a78d6; --accent-2: #6b4df0; --accent-soft: #9ec5f4;
+    --pos-rb: #eb6834; --pos-wr: #2a78d6;   --pos-te: #1baf7a;
+    --pos-neutral: #4d5772;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background:
+      radial-gradient(1100px 620px at 12% -10%, var(--bg-glow-1), transparent 60%),
+      radial-gradient(900px 520px at 92% 0%, var(--bg-glow-2), transparent 55%),
+      var(--bg);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 14px 22px 0; border-bottom: 1px solid var(--line);
+    background:
+      linear-gradient(115deg,
+        color-mix(in srgb, var(--accent) 42%, transparent),
+        color-mix(in srgb, var(--accent-2) 34%, transparent) 42%,
+        color-mix(in srgb, var(--pos-rb) 20%, transparent) 78%,
+        transparent), var(--panel-tint);
+  }
+  h1 {
+    font-size: 20px; margin: 0 0 14px; font-weight: 850; letter-spacing: -.5px;
+    display: flex; align-items: center; gap: 9px;
+  }
+  h1 .mark {
+    display: inline-grid; place-items: center; width: 27px; height: 27px;
+    border-radius: 8px; font-size: 15px; line-height: 1;
+    background: linear-gradient(140deg, var(--accent), var(--accent-2));
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .meta { color: var(--dim); font-size: 12px; margin-bottom: 14px; }
+
+  /* Tabs read as a row of folders, and the selected one is unmistakable. Each owns a
+     hue so the page announces which room you are in the moment it paints. */
+  .tabs { display: flex; gap: 3px; margin-left: auto; flex-wrap: wrap; align-self: flex-end; }
+  .tab {
+    background: none; border: none; border-bottom: 3px solid transparent;
+    color: var(--dim); padding: 9px 15px 10px; cursor: pointer;
+    font: inherit; font-weight: 650; letter-spacing: .2px;
+    border-radius: 8px 8px 0 0; transition: background .14s, color .14s;
+  }
+  .tab:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--tabhue, var(--accent)) 16%, transparent);
+  }
+  .tab[aria-selected="true"] {
+    color: var(--text); font-weight: 800;
+    border-bottom-color: var(--tabhue, var(--accent));
+    background: color-mix(in srgb, var(--tabhue, var(--accent)) 22%, transparent);
+  }
+  .tab[data-view="startsit"] { --tabhue: #3987e5; }
+  .tab[data-view="rankings"] { --tabhue: #7c5cff; }
+  .tab[data-view="waivers"]  { --tabhue: #199e70; }
+  .tab[data-view="season"]   { --tabhue: #d98a26; }
+  .tab[data-view="draft"]    { --tabhue: #d95926; }
+  .tab[data-view="roster"]   { --tabhue: #2aa8b8; }
+  .tab[data-view="settings"] { --tabhue: #8d93a8; }
+  main { padding: 20px; max-width: 1400px; margin: 0 auto; }
+  .view[hidden] { display: none; }
+  .row { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+  .card {
+    background: var(--panel-tint); border: 1px solid var(--line-soft);
+    border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--accent) 10%, transparent) inset,
+                0 6px 18px rgba(0,0,0,.10);
+  }
+  #view-startsit { --section: #3987e5; }
+  #view-rankings { --section: #7c5cff; }
+  #view-waivers  { --section: #199e70; }
+  #view-season   { --section: #d98a26; }
+  #view-draft    { --section: #d95926; }
+  #view-roster   { --section: #2aa8b8; }
+  #view-settings { --section: #8d93a8; }
+  .card h2 {
+    font-size: 12px; margin: 0 0 13px; text-transform: uppercase;
+    letter-spacing: .9px; font-weight: 800;
+    /* 62%, not more: at 78% the amber heading came out 4.10:1 on white and the
+       teal 4.16:1, both under the 4.5 bar for 12px text. Here the worst is
+       5.58:1. */
+    color: color-mix(in srgb, var(--section) 62%, var(--text));
+    display: flex; align-items: center; gap: 9px;
+  }
+  .card h2::before {
+    content: ""; width: 4px; height: 15px; border-radius: 2px; flex: none;
+    background: var(--section);
+  }
+  /* A thin colour bar across the top of each card ties it to its tab. */
+  .card {
+    position: relative; overflow: hidden;
+  }
+  .card::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
+    background: linear-gradient(90deg, var(--section),
+      color-mix(in srgb, var(--section) 25%, transparent) 60%, transparent);
+  }
+  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 3px; }
+  input, select, button {
+    font: inherit; color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  input[type=number] { width: 76px; }
+  button { cursor: pointer; }
+  button.primary {
+    background: linear-gradient(92deg, var(--accent), var(--accent-2));
+    border-color: transparent; color: #fff; font-weight: 600;
+  }
+  button.primary:hover { filter: brightness(1.1); }
+  button.link { background: none; border: none; color: var(--accent); padding: 0; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 6px 9px; border-bottom: 1px solid var(--line-soft); }
+  th:first-child, td:first-child, th.l, td.l { text-align: left; }
+  th {
+    color: var(--dim); font-weight: 700; font-size: 10px; text-transform: uppercase;
+    letter-spacing: .7px; position: sticky; top: 0; z-index: 2;
+    /* Opaque, not a translucent tint: rows scroll UNDER this, and any transparency
+       lets them show through the header text. */
+    background-image: linear-gradient(var(--panel-2), var(--panel-tint));
+    background-color: var(--panel-tint);
+    border-bottom: 1px solid var(--line);
+  }
+  /* Zebra striping, then a section-tinted hover on top. Both are faint on purpose —
+     they help the eye track a row across eight columns and must not compete with the
+     status colours that actually mean something. */
+  tbody tr:nth-child(even of :not(.why)) {
+    background: color-mix(in srgb, var(--line-soft) 42%, transparent);
+  }
+  tbody tr:hover {
+    background: color-mix(in srgb, var(--section, var(--accent)) 14%, transparent);
+  }
+  tbody tr.why:hover { background: none; }
+
+  /* Rank medals. The top three of anything get their colour; everyone else stays ink,
+     and the number is right there either way. */
+  td.rk { font-weight: 750; font-variant-numeric: tabular-nums; }
+  td.rk span {
+    display: inline-grid; place-items: center; min-width: 22px; height: 22px;
+    border-radius: 6px; font-size: 11px; font-weight: 800; color: #fff;
+    background: color-mix(in srgb, var(--muted) 55%, transparent);
+  }
+  td.rk.r1 span { background: linear-gradient(140deg, #d4a017, #b8860b); }
+  td.rk.r2 span { background: linear-gradient(140deg, #9aa5b4, #78838f); }
+  td.rk.r3 span { background: linear-gradient(140deg, #b06d3a, #8c5424); }
+
+  /* Long tables scroll INSIDE the card, with the header row pinned.
+     `position: sticky` on a <th> only activates against the nearest scrollport, and
+     `overflow-x: auto` silently makes this div that scrollport. With its height left to
+     fit the content there was nothing to scroll against, so the header never moved and
+     the sticky rule above looked broken — the column names were already meant to
+     follow you down and simply could not. Capping the height turns it back on. */
+  .scroll { overflow: auto; max-height: min(76vh, 860px); overscroll-behavior: contain; }
+  .tag {
+    display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 20px;
+    border: 1px solid var(--line); color: var(--dim); margin-left: 6px; white-space: nowrap;
+  }
+  /* Status colours always ship with their label, never colour alone. */
+  .tag.warn     { color: var(--warn);     border-color: var(--warn); }
+  .tag.bad      { color: var(--critical); border-color: var(--critical); }
+  .tag.serious  { color: var(--serious);  border-color: var(--serious); }
+  .tag.good     { color: var(--good);     border-color: var(--good); }
+
+  /* ---- Bust / boom odds --------------------------------------------------
+     Numbers first. The bar is a proportion of one row's own 100%, so it needs no
+     shared scale and no legend to read: red is how often he disappoints, green how
+     often he wins you the week. Both are written out beside it, so the colour is
+     never the only thing saying it. */
+  .odds { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+  .split { display: flex; width: 92px; height: 9px; border-radius: 5px;
+           overflow: hidden; background: var(--panel-2); flex: none; }
+  .split > i { display: block; height: 100%; }
+  .split > i.bust { background: var(--critical); }
+  .split > i.mid  { background: color-mix(in srgb, var(--line) 85%, transparent); }
+  .split > i.boom { background: var(--good); }
+  .odds-n { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .odds-n b { font-weight: 700; }
+  .odds-n b.bust { color: var(--critical); }
+  .odds-n b.boom { color: var(--good); }
+
+  /* Position chip: a solid pill, the way every fantasy site draws one. Colour
+     reinforces an abbreviation that is always present, so it is never load-bearing. */
+  .chip {
+    display: inline-block; min-width: 34px; text-align: center; font-size: 10px;
+    font-weight: 800; letter-spacing: .6px; padding: 3px 7px; border-radius: 5px;
+    margin-right: 8px; vertical-align: 1px; color: #fff;
+    background: var(--chip-k);
+    box-shadow: 0 1px 2px rgba(0,0,0,.18);
+  }
+  .chip.RB  { background: var(--chip-rb); }
+  .chip.WR  { background: var(--chip-wr); }
+  .chip.TE  { background: var(--chip-te); }
+  .chip.QB  { background: var(--chip-qb); }
+  .chip.K   { background: var(--chip-k); }
+  .chip.DST { background: var(--chip-dst); }
+
+  /* Headshot, ringed in the player's team colour. The ring is decoration on top of an
+     image that already identifies him — it is never the only thing telling two players
+     apart, which is what keeps it out of the validated data palette's jurisdiction. */
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%; vertical-align: middle;
+    margin-right: 8px; object-fit: cover; background: var(--panel-2);
+    border: 2px solid var(--team, var(--line));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--panel-tint) 80%, transparent);
+  }
+  .avatar.big { width: 44px; height: 44px; }
+
+  /* Team badge: logo plus abbreviation. Both, always — a logo alone is unreadable at
+     18px for anyone who does not already know all 32, and the abbreviation alone was
+     what we had before. */
+  .team {
+    display: inline-flex; align-items: center; gap: 4px; vertical-align: middle;
+    font-size: 11px; letter-spacing: .5px; color: var(--muted); font-weight: 600;
+  }
+  .team img { width: 17px; height: 17px; object-fit: contain; }
+
+  /* Team colour as a left edge on the name cell. Purely decorative; the row is
+     identified by the name written in it. */
+  td.l.who { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--team, transparent) 85%, transparent); }
+
+  /* Floor / ceiling as a labelled range. The bare bar was unreadable: it showed a
+     span with no numbers and no sense of how wide "wide" is. Now the outcome range
+     is written out and the spread is given as a percentage, which is the thing you
+     actually compare between two players. */
+  .fc { display: flex; align-items: center; gap: 9px; white-space: nowrap; }
+  .fc .nums { font-variant-numeric: tabular-nums; font-size: 12px; color: var(--dim); }
+  .fc .nums b { color: var(--text); font-weight: 650; }
+  .fc .spread {
+    font-size: 10px; padding: 1px 6px; border-radius: 20px; font-weight: 700;
+    border: 1px solid currentColor;
+  }
+  .fc .spread.tight { color: var(--good); }
+  .fc .spread.mid   { color: var(--warn); }
+  .fc .spread.wide  { color: var(--serious); }
+
+  .slot { color: var(--muted); font-size: 11px; letter-spacing: .5px; }
+  /* Workload: opportunity, in the same tabular figures as the projections beside it. */
+  .usage { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
+           white-space: nowrap; }
+  /* Proportion bar: one hue, 4px rounded end, common scale across rows. */
+  .meter { display: inline-block; width: 78px; height: 8px; border-radius: 4px;
+           background: color-mix(in srgb, var(--line) 70%, transparent);
+           vertical-align: middle; overflow: hidden; }
+  .meter > i { display: block; height: 100%; border-radius: 4px;
+               background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+  .slotname {
+    display: inline-block; min-width: 62px; color: var(--muted); font-size: 10px;
+    font-weight: 700; letter-spacing: .8px; text-transform: uppercase;
+  }
+  .empty { color: var(--dim); padding: 20px; text-align: center; }
+  .note { color: var(--dim); font-size: 12px; margin-top: 8px; }
+  .total {
+    font-size: 42px; font-weight: 850; letter-spacing: -1.4px;
+    background: linear-gradient(92deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .total span { font-size: 13px; font-weight: 400; color: var(--dim); }
+  .bench td { opacity: .6; }
+  tr.nb td { border-bottom: none; padding-bottom: 2px; }
+  tr.why td { color: var(--dim); font-size: 12px; padding-top: 0; padding-bottom: 9px;
+              line-height: 1.5; max-width: 0; }
+  tr.filled td { background: linear-gradient(90deg,
+      color-mix(in srgb, var(--accent) 13%, transparent), transparent 65%); }
+  tr.filled td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+  /* ---- The starting lineup, as cards -------------------------------------
+     A table is the right tool for comparing eleven numbers and the wrong one for
+     looking at your team. This is the one place the page should feel like a team
+     sheet, so the same data gets a second, visual rendering above it: face, team
+     colour, logo watermark, points. Nothing here is the only carrier of anything —
+     every card names the slot, the player and the number in text. */
+  .squad {
+    display: grid; gap: 10px; margin-bottom: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  }
+  /* The team colour arrives as a solid top bar and a WEAK wash, not a strong one.
+     Team brands include several near-black navies, and at the 34% this started on,
+     a dark team over the light surface put the slot label at about 2.2:1 — unreadable,
+     and unreadable in a way that depends on which team you happen to root for. The bar
+     carries the colour at full strength where no text sits; the wash stays light enough
+     that every card keeps the same contrast regardless of team. */
+  .pcard {
+    position: relative; overflow: hidden; border-radius: var(--radius);
+    padding: 12px 10px 9px; text-align: center;
+    border: 1px solid var(--line-soft);
+    background:
+      linear-gradient(170deg,
+        color-mix(in srgb, var(--team, var(--accent)) 14%, transparent),
+        transparent 58%),
+      var(--panel-tint);
+  }
+  .pcard::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
+    background: var(--team, var(--accent));
+  }
+  .pcard.empty-slot { opacity: .55; }
+  /* Logo sits behind the content as texture, low contrast, never load-bearing. */
+  .pcard > .wm {
+    position: absolute; right: -14px; bottom: -14px; width: 76px; height: 76px;
+    opacity: .13; object-fit: contain; pointer-events: none;
+  }
+  .pcard > * { position: relative; }
+  .pslot {
+    display: block; font-size: 9px; font-weight: 800; letter-spacing: 1.1px;
+    text-transform: uppercase; color: var(--dim); margin-bottom: 6px;
+  }
+  .phead {
+    width: 54px; height: 54px; border-radius: 50%; object-fit: cover;
+    background: var(--panel-2); border: 2px solid var(--panel-tint);
+    box-shadow: 0 2px 8px rgba(0,0,0,.22); margin-bottom: 5px;
+  }
+  .pname {
+    display: block; font-size: 12px; font-weight: 650; line-height: 1.25;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ppts {
+    display: block; font-size: 19px; font-weight: 750; letter-spacing: -.4px;
+    font-variant-numeric: tabular-nums; margin-top: 2px;
+  }
+  .pmatch { display: block; font-size: 10px; color: var(--dim); }
+
+  /* Hero total, with the league benchmark beside it so the number means something. */
+  .hero { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .hero .bar {
+    flex: 1 1 220px; height: 10px; border-radius: 5px; min-width: 160px;
+    background: color-mix(in srgb, var(--line) 70%, transparent); position: relative;
+  }
+  .hero .bar > i {
+    position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  }
+  .hero .bar > b {
+    position: absolute; top: -4px; width: 2px; height: 18px; border-radius: 1px;
+    background: var(--text);
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="mark" aria-hidden="true">🏈</span>Fantasy Football</h1>
+  <span class="meta" id="meta"></span>
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" data-view="startsit" aria-selected="true">Start / Sit</button>
+    <button class="tab" role="tab" data-view="rankings" aria-selected="false">Rankings</button>
+    <button class="tab" role="tab" data-view="waivers" aria-selected="false">Waivers</button>
+    <button class="tab" role="tab" data-view="season" aria-selected="false">Season Insights</button>
+    <button class="tab" role="tab" data-view="draft" aria-selected="false">Draft</button>
+    <button class="tab" role="tab" data-view="roster" aria-selected="false">Roster</button>
+    <button class="tab" role="tab" data-view="settings" aria-selected="false">Settings</button>
+  </div>
+</header>
+
+<main>
+  <div class="card">
+    <div class="row" style="align-items:flex-end">
+      <div>
+        <label for="week">Week</label>
+        <select id="week"></select>
+      </div>
+      <div>
+        <label for="format">Scoring preset</label>
+        <select id="format">
+          <option value="full_ppr">Full PPR</option>
+          <option value="half_ppr">Half PPR</option>
+          <option value="standard">Standard</option>
+          <option value="custom">Custom (edited)</option>
+        </select>
+      </div>
+      <div class="note" id="unprojectable"></div>
+    </div>
+  </div>
+
+  <section class="view" id="view-startsit">
+    <div class="card">
+      <h2>Optimal lineup</h2>
+      <div id="lineup"></div>
+    </div>
+    <div class="card">
+      <h2>Bench</h2>
+      <div id="bench"></div>
+    </div>
+  </section>
+
+  <section class="view" id="view-rankings" hidden>
+    <div class="card">
+      <h2>Weekly rankings</h2>
+      <div class="row" style="margin-bottom:10px">
+        <div>
+          <label for="rankpos">Position</label>
+          <select id="rankpos">
+            <option>QB</option><option>RB</option><option selected>WR</option>
+            <option>TE</option><option>FLEX</option><option>K</option><option>DST</option>
+          </select>
+        </div>
+        <div>
+          <label for="ranklimit">Show</label>
+          <select id="ranklimit">
+            <option>25</option><option selected>50</option><option>100</option>
+          </select>
+        </div>
+        <div>
+          <label for="showwhy">Explain</label>
+          <label style="display:flex;gap:6px;align-items:center;color:var(--text)">
+            <input type="checkbox" id="showwhy" checked style="width:auto"> why this rank
+          </label>
+        </div>
+      </div>
+      <div class="scroll" id="rankings"></div>
+      <div class="note" id="heatKey"></div>
+      <div class="note" id="matchupnote"></div>
+    </div>
+
+  </section>
+
+  <section class="view" id="view-waivers" hidden>
+    <div class="card">
+      <h2>Who is worth picking up</h2>
+      <div class="row" style="align-items:flex-end;margin-bottom:10px">
+        <div>
+          <label for="wpos">Position</label>
+          <select id="wpos">
+            <option value="ALL" selected>Any</option><option>QB</option>
+            <option>RB</option><option>WR</option><option>TE</option>
+            <option>K</option><option>DST</option>
+          </select>
+        </div>
+        <div>
+          <label for="whorizon">Judge over</label>
+          <select id="whorizon">
+            <option value="1">This week only</option>
+            <option value="4" selected>Next 4 weeks</option>
+            <option value="99">Rest of season</option>
+          </select>
+        </div>
+      </div>
+      <div id="waiverStatus" class="note"></div>
+      <div class="scroll" id="waiverTable"></div>
+      <div class="note" id="waiverNote"></div>
+    </div>
+  </section>
+
+  <section class="view" id="view-season" hidden>
+    <div class="card">
+      <h2>Season outlook vs the sportsbook
+        <span class="tag">not in the projections</span></h2>
+      <div class="row" style="margin-bottom:10px">
+        <div>
+          <label for="seasonpos">Position</label>
+          <select id="seasonpos">
+            <option>QB</option><option selected>RB</option>
+            <option>WR</option><option>TE</option>
+          </select>
+        </div>
+        <div>
+          <label for="seasonstat">Market</label>
+          <select id="seasonstat"></select>
+        </div>
+      </div>
+      <div class="scroll" id="linesTable"></div>
+      <div class="note" id="linesNote"></div>
+    </div>
+
+    <div class="card">
+      <h2>Pass-catching backs</h2>
+      <div class="scroll" id="catchingBacks"></div>
+      <div class="note">
+        Sportsbooks post a receiving line for only three running backs, so this comes
+        from our own projections instead — every back, summed across the season. Under
+        PPR a reception is worth as much as ten rushing yards, so two backs with the
+        same rushing workload are not the same player at all. This is also the
+        matchup-sensitive group: receiving backs measured 4.6× more responsive to the
+        opponent than early-down grinders, which is the reverse of the usual story about
+        bruisers and stout fronts.
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="view-draft" hidden>
+    <div class="card">
+      <h2>Your draft plan</h2>
+      <div class="row" style="align-items:flex-end">
+        <div>
+          <label for="dteams">League size</label>
+          <select id="dteams"><option>10</option><option selected>12</option></select>
+        </div>
+        <div>
+          <label for="dslot">Your pick</label>
+          <select id="dslot"></select>
+        </div>
+      </div>
+      <div id="draftPlan"></div>
+    </div>
+    <div class="card">
+      <h2>Positional scarcity</h2>
+      <div id="draftCliffs"></div>
+      <div class="note" id="vorNote"></div>
+    </div>
+    <div class="card">
+      <h2>Board</h2>
+      <div class="row" style="margin-bottom:10px">
+        <div>
+          <label for="dpos">Position</label>
+          <select id="dpos">
+            <option value="ALL" selected>All</option><option>QB</option><option>RB</option>
+            <option>WR</option><option>TE</option><option>K</option><option>DST</option>
+          </select>
+        </div>
+        <div>
+          <label for="dwhy">Detail</label>
+          <label style="display:flex;gap:6px;align-items:center;color:var(--text)">
+            <input type="checkbox" id="dwhy" checked style="width:auto"> last season
+          </label>
+        </div>
+        <div>
+          <label for="dsort">Sort by</label>
+          <select id="dsort">
+            <option value="vor" selected>Value over replacement</option>
+            <option value="pts">Projected season points</option>
+            <option value="adp">Consensus ADP</option>
+          </select>
+        </div>
+      </div>
+      <div class="scroll" id="draftBoard"></div>
+      <div class="note" id="draftCaveat"></div>
+    </div>
+  </section>
+
+  <section class="view" id="view-roster" hidden>
+    <div class="card">
+      <h2>Import your league</h2>
+      <div class="row" style="align-items:flex-end">
+        <div>
+          <label for="platform">Platform</label>
+          <select id="platform">
+            <option value="sleeper">Sleeper</option>
+            <option value="espn">ESPN</option>
+          </select>
+        </div>
+        <div style="flex:1 1 220px">
+          <label for="leagueid">League ID</label>
+          <input id="leagueid" placeholder="from your league's URL" style="width:100%">
+        </div>
+        <div><button class="primary" id="importleague">Import</button></div>
+        <div><button class="link" id="clearleague">Clear</button></div>
+      </div>
+      <div class="note" id="importhelp"></div>
+      <div class="note" id="importstatus"></div>
+      <div class="row" id="teamPick" hidden style="align-items:flex-end;margin-top:10px">
+        <div>
+          <label for="leagueteam">Which team is yours?</label>
+          <select id="leagueteam"></select>
+        </div>
+        <div><button class="primary" id="loadteam">Use this team</button></div>
+        <div class="note" id="leaguemeta" style="margin:0"></div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="card" style="flex:1 1 340px">
+        <h2>Add players</h2>
+        <input id="search" placeholder="Search by name…" style="width:100%">
+        <div class="scroll" id="searchResults" style="max-height:460px;margin-top:10px"></div>
+      </div>
+      <div class="card" style="flex:1 1 340px">
+        <h2>Your roster (<span id="rosterCount">0</span>)</h2>
+        <div class="scroll" id="rosterList" style="max-height:460px"></div>
+        <div class="note">
+          Saved in this browser only. League import will populate this automatically later.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="view" id="view-settings" hidden>
+    <div class="row">
+      <div class="card" style="flex:1 1 460px">
+        <h2>Scoring</h2>
+        <div class="grid" id="scoringGrid"></div>
+        <div class="note">
+          Every projection and ranking recomputes as you type. Stats no source can
+          project are marked; they score real results but are excluded from projections.
+        </div>
+      </div>
+      <div class="card" style="flex:1 1 260px">
+        <h2>Lineup slots</h2>
+        <div class="grid" id="slotGrid"></div>
+        <div class="note">FLEX accepts RB, WR or TE. SUPERFLEX also accepts QB.</div>
+        <p><button class="link" id="reset">Reset everything to defaults</button></p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="scoring.js"></script>
+<script src="fantasy-data.js"></script>
+<script>
+/* ------------------------------------------------------------------ *
+ * Data decoding.
+ * build.py ships a compacted payload (short field names, stat keys as
+ * indices) to keep the file emailable. The decoding tables travel with the
+ * data, so this never hardcodes a mapping that could drift.
+ * ------------------------------------------------------------------ */
+var DATA = window.FF_DATA;
+
+function expand(data) {
+  var statKeys = data.stat_keys, weekFields = data.week_fields;
+  var playerFields = data.player_fields, sourceCodes = data.source_codes;
+  var players = [];
+  for (var i = 0; i < data.players.length; i++) {
+    var raw = data.players[i], player = {};
+    for (var key in raw) {
+      if (!Object.prototype.hasOwnProperty.call(raw, key)) continue;
+      var name = playerFields[key] || key;
+      if (name !== 'weeks') { player[name] = raw[key]; continue; }
+      var weeks = {};
+      for (var wk in raw[key]) {
+        if (!Object.prototype.hasOwnProperty.call(raw[key], wk)) continue;
+        var src = raw[key][wk], week = {};
+        for (var f in src) {
+          if (!Object.prototype.hasOwnProperty.call(src, f)) continue;
+          var field = weekFields[f] || f;
+          if (field === 'stats') {
+            var stats = {};
+            for (var idx in src[f]) {
+              if (Object.prototype.hasOwnProperty.call(src[f], idx))
+                stats[statKeys[+idx]] = src[f][idx];
+            }
+            week.stats = stats;
+          } else if (field === 'sources') {
+            var used = [];
+            for (var s = 0; s < src[f].length; s++) used.push(sourceCodes[src[f][s]]);
+            week.sources = used;
+          } else week[field] = src[f];
+        }
+        weeks[wk] = week;
+      }
+      player.weeks = weeks;
+    }
+    players.push(player);
+  }
+  return players;
+}
+
+var PLAYERS = expand(DATA);
+var BY_ID = {};
+for (var i = 0; i < PLAYERS.length; i++) BY_ID[PLAYERS[i].gsis_id] = PLAYERS[i];
+
+/* ------------------------------------------------------------------ *
+ * Scoring config. Mirrors scoring.py's presets; scoring.js does the maths
+ * so the browser and the backtest cannot disagree.
+ * ------------------------------------------------------------------ */
+var BASE = {
+  pass_yd: 0.04, pass_td: 4, pass_int: -2, pass_2pt: 2,
+  rush_yd: 0.1, rush_td: 6, rush_2pt: 2,
+  rec_yd: 0.1, rec_td: 6, rec_2pt: 2, fum_lost: -2,
+  fg_made_0_19: 3, fg_made_20_29: 3, fg_made_30_39: 3, fg_made_0_39: 3,
+  fg_made_40_49: 4, fg_made_50_59: 5, fg_made_60_: 5, fg_made_50p: 5,
+  fg_missed: -1, pat_made: 1, pat_missed: -1,
+  def_sack: 1, def_int: 2, def_fum_rec: 2, def_td: 6, def_safety: 2, st_td: 6
+};
+var DST_TIERS = [
+  { max: 0, points: 10 }, { max: 6, points: 7 }, { max: 13, points: 4 },
+  { max: 20, points: 1 }, { max: 27, points: 0 }, { max: 34, points: -1 },
+  { max: null, points: -4 }
+];
+var RECEPTION = { full_ppr: 1, half_ppr: 0.5, standard: 0 };
+
+/* Stats that leagues score but nothing can project. Mirrors contract.UNPROJECTABLE. */
+var UNPROJECTABLE = ['pass_td_50', 'rec_td_50', 'rush_td_50'];
+
+var DEFAULT_SLOTS = { QB: 1, RB: 2, WR: 2, TE: 1, FLEX: 1, SUPERFLEX: 0, K: 1, DST: 1 };
+var FLEX_OK = { RB: 1, WR: 1, TE: 1 };
+var SUPERFLEX_OK = { QB: 1, RB: 1, WR: 1, TE: 1 };
+
+var STORE = 'ff.v1';
+var state = load();
+
+function copy(source) {
+  var out = {};
+  for (var k in source) {
+    if (Object.prototype.hasOwnProperty.call(source, k)) out[k] = source[k];
+  }
+  return out;
+}
+
+function defaults() {
+  var perStat = copy(BASE);
+  perStat.rec = 1;
+  for (var u = 0; u < UNPROJECTABLE.length; u++) perStat[UNPROJECTABLE[u]] = 0;
+  return {
+    week: String(DATA.weeks[0]),
+    format: 'full_ppr',
+    config: { name: 'Full PPR', per_stat: perStat, bonuses: [], dst_points_allowed: DST_TIERS },
+    slots: copy(DEFAULT_SLOTS),
+    roster: [],
+    // The imported league lives in local state, not in the data file: it is per
+    // person and per league, and two people opening the same page have different
+    // ones. `leagueTeam` is the index of whichever team is yours.
+    league: null,
+    leagueTeam: undefined
+  };
+}
+
+function load() {
+  try {
+    var saved = window.localStorage.getItem(STORE);
+    if (saved) {
+      var parsed = JSON.parse(saved);
+      var base = defaults();
+      for (var k in base) if (!(k in parsed)) parsed[k] = base[k];
+      return parsed;
+    }
+  } catch (e) { /* corrupt or unavailable storage: fall through to defaults */ }
+  return defaults();
+}
+
+function save() {
+  try { window.localStorage.setItem(STORE, JSON.stringify(state)); } catch (e) {}
+}
+
+function score(stats) { return Scoring.score(stats || {}, state.config); }
+
+/* ------------------------------------------------------------------ *
+ * Lineup optimizer — max-weight bipartite matching (Hungarian).
+ *
+ * A correction to the project plan, which justified this by claiming greedy
+ * misfills FLEX. Measured over 4,000 random rosters and slot configurations,
+ * greedy never loses — for STANDARD lineups it is optimal, because the
+ * eligibility sets are nested (RB/WR/TE all fit FLEX, everything fits
+ * SUPERFLEX) and slotList() happens to emit flex slots last.
+ *
+ * Matching is kept because that optimality is an accident of ordering, not a
+ * property of the problem. Fill FLEX before a position slot while the roster
+ * is thin there and greedy strands real points:
+ *
+ *     slots [FLEX, RB], roster RB1=10 WR1=9
+ *     greedy   -> FLEX takes RB1, RB slot empty      = 10.0
+ *     matching -> FLEX takes WR1, RB takes RB1       = 19.0
+ *
+ * So a future reordering of slotList(), or a custom slot type, would quietly
+ * cost points with no error anywhere. Matching cannot regress that way, and
+ * at ~10 slots by ~20 players it is free.
+ * ------------------------------------------------------------------ */
+function hungarian(cost, n, m) {
+  var INF = Infinity, i, j;
+  var u = [], v = [], p = [], way = [];
+  for (i = 0; i <= n; i++) u.push(0);
+  for (j = 0; j <= m; j++) { v.push(0); p.push(0); way.push(0); }
+  for (i = 1; i <= n; i++) {
+    p[0] = i;
+    var j0 = 0, minv = [], used = [];
+    for (j = 0; j <= m; j++) { minv.push(INF); used.push(false); }
+    do {
+      used[j0] = true;
+      var i0 = p[j0], delta = INF, j1 = -1;
+      for (j = 1; j <= m; j++) {
+        if (used[j]) continue;
+        var cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+        if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+        if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+      }
+      if (j1 < 0) break;
+      for (j = 0; j <= m; j++) {
+        if (used[j]) { u[p[j]] += delta; v[j] -= delta; }
+        else minv[j] -= delta;
+      }
+      j0 = j1;
+    } while (p[j0] !== 0);
+    while (j0) { var prev = way[j0]; p[j0] = p[prev]; j0 = prev; }
+  }
+  var assign = [];
+  for (i = 0; i < n; i++) assign.push(-1);
+  for (j = 1; j <= m; j++) if (p[j]) assign[p[j] - 1] = j - 1;
+  return assign;
+}
+
+function slotList() {
+  var out = [];
+  var order = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'SUPERFLEX', 'K', 'DST'];
+  for (var i = 0; i < order.length; i++) {
+    var count = state.slots[order[i]] || 0;
+    for (var c = 0; c < count; c++) out.push(order[i]);
+  }
+  return out;
+}
+
+function eligible(slot, position) {
+  if (slot === 'FLEX') return !!FLEX_OK[position];
+  if (slot === 'SUPERFLEX') return !!SUPERFLEX_OK[position];
+  return slot === position;
+}
+
+function optimize(entries) {
+  var slots = slotList();
+  if (!slots.length || !entries.length) return { lineup: [], bench: entries, total: 0 };
+  var n = slots.length, m = entries.length;
+  var padded = Math.max(n, m), cost = [], i, j;
+  for (i = 0; i < padded; i++) {
+    var row = [];
+    for (j = 0; j < padded; j++) {
+      var ok = i < n && j < m && eligible(slots[i], entries[j].position)
+               && !entries[j].week.is_bye;
+      row.push(ok ? -entries[j].points : 0);
+    }
+    cost.push(row);
+  }
+  var assign = hungarian(cost, padded, padded);
+  var lineup = [], used = {};
+  for (i = 0; i < n; i++) {
+    var pick = assign[i];
+    var entry = (pick >= 0 && pick < m
+                 && eligible(slots[i], entries[pick].position)
+                 && !entries[pick].week.is_bye) ? entries[pick] : null;
+    if (entry) used[entry.player.gsis_id] = true;
+    lineup.push({ slot: slots[i], entry: entry });
+  }
+  var bench = [], total = 0;
+  for (j = 0; j < m; j++) if (!used[entries[j].player.gsis_id]) bench.push(entries[j]);
+  for (i = 0; i < lineup.length; i++) if (lineup[i].entry) total += lineup[i].entry.points;
+  bench.sort(function (a, b) { return b.points - a.points; });
+  return { lineup: lineup, bench: bench, total: total };
+}
+
+/* ------------------------------------------------------------------ *
+ * Rendering — full redraw, like tic-tac-toe.html. Mutate state, call
+ * render(); never patch the DOM directly.
+ * ------------------------------------------------------------------ */
+function entryFor(player, week) {
+  var w = player.weeks[week];
+  if (!w) return null;
+  return { player: player, week: w, position: player.position, points: score(w.stats) };
+}
+
+function rosterEntries() {
+  var out = [];
+  for (var i = 0; i < state.roster.length; i++) {
+    var player = BY_ID[state.roster[i]];
+    if (!player) continue;
+    var entry = entryFor(player, state.week);
+    if (entry) out.push(entry);
+  }
+  out.sort(function (a, b) { return b.points - a.points; });
+  return out;
+}
+
+/* Rank cell with a medal for the top three. The number is always written, so the
+   colour is celebration rather than information. */
+function rankCell(rank) {
+  var cls = rank <= 3 ? ' r' + rank : '';
+  return '<td class="rk' + cls + '"><span>' + rank + '</span></td>';
+}
+
+function esc(text) {
+  return String(text).replace(/[&<>"]/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+  });
+}
+
+/* Bands share one scale across a table. Scaling each row to its own ceiling would
+   make a 4-point tight end and a 22-point running back draw identical bars, which
+   is exactly the comparison the column exists to support. */
+var BAND_MAX = 30;
+
+function setBandScale(entries) {
+  var max = 0;
+  for (var i = 0; i < entries.length; i++) {
+    var w = entries[i].week;
+    var ceiling = entries[i].points * (w.ceiling_mult || 1.35);
+    if (ceiling > max) max = ceiling;
+  }
+  BAND_MAX = Math.max(10, Math.ceil(max / 5) * 5);
+}
+
+/* ------------------------------------------------------------------ *
+ * Outcome distribution.
+ *
+ * The quantile grid is the model's own walk-forward residuals — the ratio of what
+ * really happened to what it projected, at each 5% of the distribution, bucketed by
+ * position and projection size. Multiplying it by a player's projection turns it
+ * into his actual range of outcomes in points, which is what makes a real
+ * probability available rather than an asserted one.
+ * ------------------------------------------------------------------ */
+var BANDS = (DATA.facts && DATA.facts.bands) || {};
+
+function gridFor(position, points) {
+  var grids = BANDS.grids || {}, tiers = BANDS.tiers || [];
+  for (var i = 0; i < tiers.length; i++) {
+    if (points >= tiers[i][0] && points < tiers[i][1]) {
+      var key = position + '.' + fmtTier(tiers[i]);
+      if (grids[key]) return grids[key];
+    }
+  }
+  return grids[position + '.*'] || null;
+}
+
+/* Python writes tier keys with %g formatting ("2-6", "15-100"); match that exactly
+   rather than reformatting, or every lookup silently falls through to the wildcard. */
+function fmtTier(tier) {
+  return trimNum(tier[0]) + '-' + trimNum(tier[1]);
+}
+
+function trimNum(value) {
+  var text = String(value);
+  if (text.indexOf('.') < 0) return text;
+  text = text.replace(/0+$/, '').replace(/\.$/, '');
+  return text;
+}
+
+/* Probability that he finishes BELOW `target` points, read off the grid.
+   The grid is an empirical CDF in disguise: step i is the (i/steps)th quantile of
+   actual/projected, so finding where a target sits between two steps gives the
+   cumulative probability directly, with no distribution assumed. */
+function chanceUnder(grid, points, target) {
+  if (!grid || !points) return null;
+  var needed = target / points, last = grid.length - 1;
+  if (needed <= grid[0]) return 0;
+  if (needed >= grid[last]) return 1;
+  var i = 0;
+  while (i < last && grid[i + 1] < needed) i++;
+  var span = grid[i + 1] - grid[i];
+  var within = span ? (needed - grid[i]) / span : 0;
+  return (i + within) / last;
+}
+
+/* ------------------------------------------------------------------ *
+ * Bust / boom odds.
+ *
+ * This column was a bar, then a heat map, and both failed the same test: you had
+ * to be told what you were looking at. A picture of a distribution is not what
+ * anyone wants from this column — they want the two numbers that decide a start
+ * or sit, which are "how likely is he to let me down" and "how likely is he to
+ * win me the week".
+ *
+ * So it is percentages, against the same per-position thresholds the commentary
+ * uses (QB 15/25, RB 10/25, WR 10/20, TE 10/15), derived from what a startable
+ * week at that position actually looks like. The bar behind them is now only a
+ * proportion, and every segment is also written out in words.
+ * ------------------------------------------------------------------ */
+var THRESHOLDS = (DATA.facts && DATA.facts.thresholds) || {};
+
+/* Round numbers a person would actually say. Ties go up, which is what makes a
+   15-point player read "under 10" rather than "under 5". */
+var LADDER = [2, 3, 5, 10, 15, 20, 25, 30, 35, 40];
+
+function snapNice(value) {
+  var best = LADDER[0], bestGap = Math.abs(value - LADDER[0]);
+  for (var i = 1; i < LADDER.length; i++) {
+    var gap = Math.abs(value - LADDER[i]);
+    if (gap <= bestGap) { best = LADDER[i]; bestGap = gap; }
+  }
+  return best;
+}
+
+function atLeast(value) {
+  for (var i = 0; i < LADDER.length; i++) if (LADDER[i] >= value) return LADDER[i];
+  return LADDER[LADDER.length - 1];
+}
+
+function oddsCell(entry) {
+  var points = entry.points, position = entry.position;
+  var grid = gridFor(position, points);
+  if (!grid || !points) return '';
+
+  /* THRESHOLDS TRACK THE PLAYER, they are not fixed per position.
+     A flat "over 20" is a fair bar for a 20-point receiver and a wall of 4% for a
+     7-point one, which made the column useless for exactly the players you are
+     undecided about. So the bar is set around his own level: he clears roughly what
+     he is projected for, or he falls to about half of it.
+
+     The percentages had to carry the meaning this way round, because the alternative
+     does not work — measured, P(beats his own projection) sits at 35-48% for every
+     player at every level, and multiples of the projection are just as flat (x1.5 is
+     14-25% across the board). The shape of the error barely changes with the level;
+     what changes is the level. So the THRESHOLD is what tells you who you are looking
+     at, and the percentage tells you how reliable he is about reaching it. */
+  var floorAt = snapNice(points * 0.5);
+  var boomAt = atLeast(points);
+  if (boomAt <= floorAt) boomAt = atLeast(floorAt + 1);
+
+  var bust = chanceUnder(grid, points, floorAt);
+  var over = 1 - chanceUnder(grid, points, boomAt);
+  if (bust === null || over === null) return '';
+  var middle = Math.max(0, 1 - bust - over);
+
+  var pct = function (v) { return Math.round(v * 100); };
+  var title = 'Out of 100 weeks like this one: ' + pct(bust) + ' under ' + floorAt
+    + ' points, ' + pct(middle) + ' in between, ' + pct(over) + ' over ' + boomAt
+    + '. From the model’s own walk-forward misses at this position and '
+    + 'projection level.';
+
+  return '<div class="odds" title="' + esc(title) + '">'
+    + '<div class="split">'
+      + '<i class="bust" style="width:' + pct(bust) + '%"></i>'
+      + '<i class="mid" style="width:' + pct(middle) + '%"></i>'
+      + '<i class="boom" style="width:' + pct(over) + '%"></i>'
+    + '</div>'
+    + '<span class="odds-n"><b class="bust">' + pct(bust) + '%</b> under ' + floorAt
+    + '</span>'
+    + '<span class="odds-n"><b class="boom">' + pct(over) + '%</b> over ' + boomAt
+    + '</span></div>';
+}
+
+function bandCell(entry) {
+  var w = entry.week;
+  if (!w.floor_mult || !entry.points) return '';
+  var floor = entry.points * w.floor_mult, ceiling = entry.points * w.ceiling_mult;
+
+  /* Spread as a share of the projection is the comparable number. Two players both
+     "10 to 20" are identical in absolute terms but a 4-point tight end swinging 0-9
+     is a completely different proposition, and the bar alone never showed that. */
+  var spreadPct = Math.round(100 * (ceiling - floor) / entry.points);
+  var band = spreadPct <= 70 ? 'tight' : (spreadPct <= 110 ? 'mid' : 'wide');
+  /* "Swingy" meant nothing to anyone who had not written it. These say what they
+     mean without a glossary, and the tooltip spells out the arithmetic. */
+  var label = band === 'tight' ? 'safe' : (band === 'mid' ? 'normal' : 'boom or bust');
+  var explain = 'Projected ' + entry.points.toFixed(1) + '. Darker means more of his '
+    + 'likely outcomes land there; the tick is the projection. The strip covers the '
+    + 'middle 90% — the extremes are cut because the top 5% runs off any shared scale. Six times out of ten he '
+    + 'finishes between ' + floor.toFixed(1) + ' and ' + ceiling.toFixed(1)
+    + ' — a swing of ' + Math.round(spreadPct) + '% of his projection, which is '
+    + (band === 'tight' ? 'narrower than most players at this level: you can pencil '
+        + 'him in and stop thinking about him.'
+       : band === 'mid' ? 'about typical for this projection level.'
+       : 'wider than most: he can win you the week or lose it outright.');
+  var tag = w.bands_calibrated ? '' : ' <span class="tag warn">uncalibrated</span>';
+
+  var odds = oddsCell(entry);
+  if (odds) return odds + tag;
+  // No fitted grid for this player: fall back to the range and the label, which are
+  // still true, rather than printing percentages nothing supports.
+  return '<div class="fc" title="' + esc(explain) + '">'
+    + '<span class="nums">' + floor.toFixed(1) + '–<b>' + ceiling.toFixed(1) + '</b></span>'
+    + '<span class="spread ' + band + '">' + label + '</span></div>' + tag;
+}
+
+function flags(entry) {
+  var out = '', w = entry.week;
+  if (w.is_bye) out += ' <span class="tag bad">BYE</span>';
+  if (w.low_signal) out += ' <span class="tag">low signal</span>';
+  if (w.play_probability !== undefined && w.play_probability < 0.99) {
+    out += ' <span class="tag warn">P(play) ' + Math.round(w.play_probability * 100) + '%</span>';
+  }
+  if (w.spread && w.spread >= 4) {
+    out += ' <span class="tag">sources differ ' + w.spread.toFixed(1) + '</span>';
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
+ * Commentary.
+ *
+ * Every clause traces to a number the model produced or a measurement in the
+ * repo. That is the whole differentiator: ESPN's blurbs are opinion, these are
+ * the model showing its work, and each one is checkable against the row it sits
+ * under.
+ *
+ * Written here rather than baked into the data because prose for 20,000
+ * player-weeks would cost megabytes, and the facts are already present —
+ * projected targets sit in the stat line, and team rank and "who is out" fall
+ * out of the other players.
+ * ------------------------------------------------------------------ */
+var FACTS = DATA.facts || {};
+
+function opportunityOf(week) {
+  var s = week.stats || {};
+  return (s.rec_tgt || 0) + (s.rush_att || 0) + (s.pass_att || 0);
+}
+
+/* Players on the same team and position, most-used first. Recomputed per render so
+   it follows the current week rather than a build-time snapshot. */
+function teammates(player, week) {
+  var out = [];
+  for (var i = 0; i < PLAYERS.length; i++) {
+    var other = PLAYERS[i];
+    if (other.team !== player.team || other.position !== player.position) continue;
+    var w = other.weeks[week];
+    if (!w) continue;
+    out.push({ player: other, week: w, opportunity: opportunityOf(w) });
+  }
+  out.sort(function (a, b) { return b.opportunity - a.opportunity; });
+  return out;
+}
+
+function ordinal(n) {
+  var suffix = (n % 100 >= 11 && n % 100 <= 13) ? 'th'
+    : ['th', 'st', 'nd', 'rd'][n % 10] || 'th';
+  return n + suffix;
+}
+
+/* Last-season facts, phrased the way a person would say them.
+
+   Deliberately NOT here: "new coaching staff", "rebuilt offensive line", "should see
+   more volume in this scheme". Those are the sentences a draft magazine writes, and
+   nothing in this pipeline knows any of it — there is no structured source for
+   coaching hires or line quality. Inventing them would make every other clause on
+   the page untrustworthy too. */
+function historyLines(player) {
+  var h = HIST[player.gsis_id], out = [];
+  if (!h) return out;
+  var season = (DATA.facts && DATA.facts.history_season) || '';
+
+  if (h.rank) {
+    var finish = h.pos + h.rank;
+    var qualifier = h.rank <= 5 ? 'an elite finish'
+      : h.rank <= 12 ? 'an every-week starter finish'
+      : h.rank <= 24 ? 'a flex-calibre finish' : '';
+    out.push('Finished ' + finish + ' in ' + season + ' (' + h.pts.toFixed(0)
+      + ' pts, ' + h.ppg.toFixed(1) + '/game)' + (qualifier ? ' — ' + qualifier : '') + '.');
+  }
+
+  /* CONSISTENCY, told from whichever end is the striking one.
+     "Over 20 in 5 of his last 10" was a template that ran whatever the numbers were,
+     so it read the same for a star and for a streamer. The count that lands depends on
+     the player: for a reliable one it is how rarely he disappointed, for a boom-bust one
+     it is how often he detonated. Pick the end that is actually unusual, and say where
+     it ranks — the count alone does not tell you whether it is good. */
+  if (h.floorlvl && h.games >= 6) {
+    var rate = h.over / h.games;
+    var place = h.crank && h.cof
+      ? (h.crank <= 3 ? ' — the ' + ordinal(h.crank) + ' steadiest ' + h.pos
+            + ' in the league'
+         : h.crank <= Math.max(5, Math.round(h.cof * 0.1))
+            ? ' — top 10% of ' + h.pos + 's for reliability'
+            : '')
+      : '';
+    if (rate >= 0.6 && h.under <= Math.max(2, h.games * 0.35)) {
+      out.push('Under ' + h.floorlvl + ' points just ' + h.under + ' time'
+        + (h.under === 1 ? '' : 's') + ' in ' + h.games + ' games' + place + '.');
+    } else {
+      out.push('Cleared ' + h.floorlvl + ' points in ' + h.over + ' of ' + h.games
+        + ' games' + place + '.');
+    }
+  }
+  if (h.boom && h.boomlvl && h.games >= 6) {
+    var boomRate = h.boom / h.games;
+    if (boomRate >= 0.25) {
+      out.push('Blew up for ' + h.boomlvl + '+ in ' + h.boom + ' of them — a genuine '
+        + 'week-winner roughly ' + Math.round(boomRate * 100) + '% of the time.');
+    }
+  }
+
+  if (Math.abs(h.close) >= 2.5 && h.games >= 6) {
+    out.push('Closed the season ' + (h.close > 0 ? 'hot' : 'cold') + ' — his final three '
+      + 'games ran ' + (h.close > 0 ? '+' : '') + h.close.toFixed(1)
+      + ' points per game against his own average.');
+  }
+
+  contextLines(player, out);
+  return out;
+}
+
+/* What changed around the player since last season.
+   Both facts are shown; only one is in the number, and each says which it is. */
+var CTX = (DATA.facts && DATA.facts.context) || {};
+
+function contextLines(player, out) {
+  var moved = (CTX.moved || {})[player.gsis_id];
+  if (moved) {
+    var effect = (CTX.effect || {})[player.position];
+    out.push('<b>New team</b> — ' + esc(moved.from) + ' to ' + esc(moved.to) + '. '
+      + 'Players who change teams average about '
+      + (effect ? Math.abs(effect).toFixed(1) : '1') + ' points a game <i>below</i> '
+      + 'their own prior season, not above it, and the projection already includes '
+      + 'that.');
+  }
+  var qb = (CTX.qbs || {})[player.team];
+  if (qb && player.position !== 'QB') {
+    var better = qb.to_ppg > qb.from_ppg;
+    out.push('<b>New quarterback</b> — ' + esc(qb.from) + ' to ' + esc(qb.to) + ' ('
+      + qb.from_ppg.toFixed(1) + ' to ' + qb.to_ppg.toFixed(1) + ' points a game last '
+      + 'season, so on paper ' + (better ? 'an upgrade' : 'a downgrade') + '). '
+      + '<span class="tag">not in the projection</span> Measured over 2020–2025 a '
+      + 'quarterback change predicts nothing usable either way.');
+  }
+}
+
+/* The market's view of the game, which for quarterbacks is the biggest context effect
+   in the model — 5.3 points of swing between a p10 and a p90 implied team total, three
+   times matchup and three times weather. Lines only exist three or four weeks out, so
+   most of the season has none and says nothing rather than inventing a number. */
+var GAMELINES = (DATA.facts && DATA.facts.environment
+                 && DATA.facts.environment.lines) || {};
+
+function environmentLine(player, position) {
+  var spot = (GAMELINES[state.week] || {})[player.team];
+  if (!spot) return '';
+  var implied = spot[0], spread = spot[1];
+  var side = spread > 0 ? 'favoured by ' + spread.toFixed(1)
+    : spread < 0 ? 'underdog by ' + Math.abs(spread).toFixed(1) : 'a pick-em';
+  var text = 'Vegas has ' + esc(player.team) + ' scoring <b>' + implied.toFixed(1)
+    + '</b> points, ' + side + '.';
+  if (position === 'QB') {
+    text += ' That is in the projection and it matters here more than anywhere else: '
+      + 'between a quiet game and a shootout it is worth 5.3 points to a quarterback. '
+      + (spread < -3 ? 'Being an underdog helps him too — trailing teams throw.'
+         : spread > 6 ? 'Being a heavy favourite works against him, though: teams '
+            + 'in front run the clock out.' : '');
+  } else if (position === 'RB' && spread > 6) {
+    text += ' Favourites run more late, which is worth a little to a back.';
+  } else {
+    text += ' Measured, it barely moves a ' + esc(position) + ' — under a point '
+      + 'of swing — so it is shown rather than leaned on.';
+  }
+  return text;
+}
+
+function commentary(entry) {
+  var p = entry.player, w = entry.week, parts = [];
+  if (w.is_bye) return ['On bye.'];
+
+  var stats = w.stats || {};
+  var spot = environmentLine(p, entry.position);
+  if (spot) parts.push(spot);
+
+  /* 1. Usage — the thing that actually predicts. */
+  var group = teammates(p, state.week);
+  var rank = 0;
+  for (var i = 0; i < group.length; i++) {
+    if (group[i].player.gsis_id === p.gsis_id) { rank = i + 1; break; }
+  }
+  /* Lead with the opportunity that actually drives the position. A running back
+     described by his target count reads as absurd, and for most of them it is also
+     the smaller number. */
+  var where = (rank && group.length > 1)
+    ? ', ' + ordinal(rank) + ' among ' + esc(p.team) + ' ' + p.position + 's' : '';
+  if (p.position === 'QB') {
+    var bits = [];
+    if (stats.pass_att) bits.push(stats.pass_att.toFixed(1) + ' pass attempts');
+    if (stats.rush_att >= 2) bits.push(stats.rush_att.toFixed(1) + ' carries');
+    if (bits.length) parts.push('Projected ' + bits.join(' and ') + '.');
+  } else if (p.position === 'RB') {
+    var rb = [];
+    if (stats.rush_att) rb.push(stats.rush_att.toFixed(1) + ' carries');
+    if (stats.rec_tgt) rb.push(stats.rec_tgt.toFixed(1) + ' targets');
+    if (rb.length) parts.push('Projected ' + rb.join(' and ') + where + '.');
+  } else if (stats.rec_tgt) {
+    parts.push('Projected ' + stats.rec_tgt.toFixed(1) + ' targets' + where + '.');
+  } else if (stats.rush_att) {
+    parts.push('Projected ' + stats.rush_att.toFixed(1) + ' carries' + where + '.');
+  }
+
+  /* 2. Teammate absence — the most repeated claim in fantasy, given a number. */
+  var lift = FACTS.teammate_absence_lift || {};
+  if (rank === 2 || rank === 3) {
+    var above = [];
+    for (var j = 0; j < rank - 1; j++) {
+      var mate = group[j], mw = mate.week;
+      var out = mw.is_bye || (mw.play_probability !== undefined && mw.play_probability < 0.5);
+      if (out) above.push(mate.player.name);
+    }
+    if (above.length && lift[String(rank)]) {
+      parts.push(above.join(' and ') + ' likely out — the '
+        + p.position + rank + ' gains about ' + lift[String(rank)].toFixed(1)
+        + ' points of target share when that happens.');
+    }
+  }
+
+  /* 3. Matchup — shown because everyone looks at it, weighted at zero because
+        it measured at zero. Saying both is the honest move. */
+  var table = (FACTS.defense_allowed || {})[p.position];
+  if (table && w.opponent && table[w.opponent]) {
+    var pair = table[w.opponent];
+    /* Matchup used to be reported as "not used in the projection". That was true, and
+       wrong: it rested on a WR-only measurement generalised to every position. Measured
+       per position, a running back's matchup is worth ~2.8x a receiver's, so the model
+       now applies it and the sentence says what it is actually worth here. */
+    var effect = (FACTS.matchup_effect || {})[p.position];
+    var worth = effect
+      ? ' Worth about ' + effect.swing_points.toFixed(1) + ' pts for a '
+        + p.position + ' between the best and worst matchup'
+        + (effect.swing_points < 0.6 ? ', which is close to nothing.' : '.')
+      : ' Not used in the projection.';
+    parts.push(esc(w.opponent) + ' allowed the ' + ordinal(pair[0]) + '-most points to '
+      + p.position + 's in ' + FACTS.defense_allowed_season + ' ('
+      + pair[1].toFixed(1) + '/game).' + worth);
+  }
+
+  /* 4. Weather — only where it measured. Wind costs a QB 0.089 pts/mph and a
+        receiver 0.055; a running back is unaffected, so the clause says so rather
+        than implying every position is in the same boat. */
+  var wx = ((FACTS.weather || {}).conditions || {})[state.week];
+  if (wx && wx[p.team]) {
+    var wind = wx[p.team][0], temp = wx[p.team][1], precip = wx[p.team][2];
+    var bits = [];
+    if (wind >= 12) bits.push(wind.toFixed(0) + ' mph wind');
+    if (temp <= 35) bits.push(temp.toFixed(0) + 'F');
+    if (precip >= 0.5) bits.push('rain or snow expected');
+    if (bits.length) {
+      var eff = ((FACTS.weather || {}).effects || {})[p.position];
+      var moved = eff && (eff.per_mph || eff.per_cold_degree);
+      parts.push('Forecast ' + bits.join(', ') + '. '
+        + (moved
+           ? 'Applied — wind costs a ' + p.position + ' about '
+             + Math.abs(eff.per_mph).toFixed(2) + ' pts per mph.'
+           : 'Not applied — weather measured at zero for running backs; it ruins '
+             + 'throws, not handoffs.')
+        + (precip >= 0.5 ? ' Precipitation is shown but not modelled.' : ''));
+    }
+  }
+
+  /* 5. Availability, when it is actually doing something. */
+  if (w.play_probability !== undefined && w.play_probability < 0.99) {
+    parts.push('Injury designation cuts the projection to '
+      + Math.round(w.play_probability * 100) + '% of a healthy week.');
+  }
+
+  /* 6. Source disagreement is a signal in itself. */
+  if (w.spread && w.spread >= 4) {
+    parts.push('Sources disagree by ' + w.spread.toFixed(1)
+      + ' points, which usually means genuine uncertainty about his role.');
+  }
+
+  if (w.low_signal) {
+    parts.push('Team defences are close to unpredictable week to week; this sits near '
+      + 'league average by design.');
+  }
+  return parts.concat(historyLines(p));
+}
+
+function sourceCells(entry) {
+  var w = entry.week;
+  function cell(value) { return '<td>' + (value === undefined ? '—' : value.toFixed(1)) + '</td>'; }
+  return cell(w.own_points) + cell(w.sleeper_points) + cell(w.espn_points);
+}
+
+var HIST = (DATA.facts && DATA.facts.history) || {};
+
+/* Headshots are remote URLs, not embedded: the full portraits are ~380 KB each and
+   1,000 of them would add 390 MB to a file that has to stay emailable. The CDN is
+   Cloudinary so we request a 96px thumbnail. onerror hides a broken image rather
+   than leaving a torn icon, which also covers the offline case. */
+/* Team colours and logos, straight from nflverse — see rankings.team_identity.
+   Decoration only. Two teams share nearly the same navy, so nothing is ever told
+   apart by colour here; every badge carries the abbreviation as well. */
+var TEAMS = (DATA.facts && DATA.facts.teams) || {};
+
+function teamStyle(team) {
+  var info = TEAMS[team];
+  return info && info[0] ? ' style="--team:' + esc(info[0]) + '"' : '';
+}
+
+function teamBadge(team) {
+  if (!team) return '';
+  var info = TEAMS[team];
+  var logo = info && info[2]
+    ? '<img src="' + esc(info[2]) + '" alt="" loading="lazy" '
+      + 'onerror="this.hidden=true">'
+    : '';
+  return '<span class="team">' + logo + esc(team) + '</span>';
+}
+
+function avatar(player, big) {
+  var info = HIST[player.gsis_id];
+  if (!info || !info.img) return '';
+  // `this.hidden=true` deliberately avoids any quote characters — an inline handler
+  // containing a quote terminates the surrounding JS string and takes the whole
+  // script down with it, which is exactly what happened here once.
+  var colour = (TEAMS[player.team] || [])[0];
+  return '<img class="avatar' + (big ? ' big' : '') + '" src="' + esc(info.img)
+    + '"' + (colour ? ' style="--team:' + esc(colour) + '"' : '')
+    + ' alt="" loading="lazy" onerror="this.hidden=true">';
+}
+
+function chip(position) {
+  return '<span class="chip ' + position + '">' + position + '</span>';
+}
+
+/* `lead` prefixes the name cell (the slot label in the lineup table); `rank`
+   prefixes an extra numbered cell (the rankings table). Building both here beats
+   string-patching the markup afterwards, which is what this used to do. */
+function playerRow(entry, options) {
+  options = options || {};
+  var p = entry.player, w = entry.week;
+  var matchup = w.opponent ? (w.is_home ? 'vs ' : '@ ') + esc(w.opponent) : '—';
+  return '<tr' + (options.cls ? ' class="' + options.cls + '"' : '') + '>'
+    + (options.rank !== undefined ? rankCell(options.rank) : '')
+    + '<td class="l who"' + teamStyle(p.team) + '>'
+      + (options.lead ? '<span class="slotname">' + options.lead + '</span>' : '')
+      + avatar(p) + chip(p.position) + esc(p.name) + flags(entry) + '</td>'
+    + '<td class="l">' + teamBadge(p.team) + ' <span class="slot">' + matchup + '</span></td>'
+    + '<td class="l">' + usageCell(entry) + '</td>'
+    + '<td><b>' + entry.points.toFixed(1) + '</b></td>'
+    + sourceCells(entry)
+    + '<td class="l">' + bandCell(entry) + '</td>'
+    + '</tr>';
+}
+
+/* Where the points are coming from, not just how many.
+   A back's receiving work is the single most under-shown number in fantasy: two backs
+   projected for the same total are completely different players if one of them catches
+   five balls a week, and under PPR the pass-catcher is worth more and is steadier.
+   It is also the measured matchup lever — receiving backs came out 4.6x more
+   matchup-sensitive than early-down grinders (matchup.py), which is the opposite of the
+   folklore. So it gets a column rather than a footnote. */
+function usageCell(entry) {
+  var s = entry.week.stats || {}, position = entry.player.position, bits = [];
+  if (entry.week.is_bye) return '<span class="slot">—</span>';
+
+  if (position === 'QB') {
+    if (s.pass_att) bits.push(Math.round(s.pass_att) + ' att');
+    if (s.rush_att >= 2) bits.push(Math.round(s.rush_att) + ' car');
+  } else if (position === 'RB') {
+    if (s.rush_att) bits.push(Math.round(s.rush_att) + ' car');
+    if (s.rec_tgt) bits.push(s.rec_tgt.toFixed(1) + ' tgt');
+  } else if (position === 'WR' || position === 'TE') {
+    if (s.rec_tgt) bits.push(s.rec_tgt.toFixed(1) + ' tgt');
+  }
+  if (!bits.length) return '<span class="slot">—</span>';
+
+  var out = '<span class="usage">' + bits.join(' · ') + '</span>';
+  /* Receiving yards called out for backs specifically, because that is the number
+     nobody sees. For a receiver it would just restate the projection. */
+  if (position === 'RB' && s.rec_yd >= 15) {
+    var heavy = s.rec_yd >= 30;
+    out += ' <span class="tag' + (heavy ? ' good' : '') + '">'
+      + Math.round(s.rec_yd) + ' rec yd</span>';
+  }
+  return out;
+}
+
+var TABLE_HEAD = '<thead><tr><th class="l">Player</th><th class="l">Matchup</th>'
+  + '<th class="l">Workload</th>'
+  + '<th>Proj</th><th>Own</th><th>Sleeper</th><th>ESPN</th>'
+  + '<th class="l">Bust / boom odds</th></tr></thead>';
+
+/* What a typical starting lineup scores this week, computed rather than remembered.
+   "Good teams are around 125 a week" is a real rule of thumb and a stale one: it
+   depends on the scoring, the slots and the week, all three of which are configurable
+   here. So the benchmark is built the way the league actually builds one — for each
+   slot, the player a middling team would have in it, meaning the Nth best at that
+   position for a league of this size. Recomputed live, so changing scoring or slots
+   moves the benchmark too. */
+var LEAGUE_SIZE = 12;
+
+function benchmarkLineup(week) {
+  var byPosition = {};
+  for (var i = 0; i < PLAYERS.length; i++) {
+    var p = PLAYERS[i];
+    var entry = entryFor(p, week);
+    if (!entry || entry.week.is_bye) continue;
+    (byPosition[p.position] = byPosition[p.position] || []).push(entry.points);
+  }
+  for (var key in byPosition) {
+    if (Object.prototype.hasOwnProperty.call(byPosition, key)) {
+      byPosition[key].sort(function (a, b) { return b - a; });
+    }
+  }
+  var slots = slotList(), total = 0, taken = {};
+  for (var s = 0; s < slots.length; s++) {
+    var slot = slots[s];
+    /* A flex is filled from whichever eligible position runs deepest, which is what a
+       real manager does. Everything else takes the next unclaimed body at its own
+       position, counting one starter per team. */
+    var pool = slot === 'FLEX' ? ['RB', 'WR', 'TE']
+      : slot === 'SUPERFLEX' ? ['QB', 'RB', 'WR', 'TE'] : [slot];
+    var best = 0;
+    for (var q = 0; q < pool.length; q++) {
+      var list = byPosition[pool[q]] || [];
+      var index = (taken[pool[q]] || 0) + LEAGUE_SIZE - 1;
+      var value = index < list.length ? list[index] : 0;
+      if (value > best) { best = value; }
+    }
+    // Charge the slot to the deepest pool so two flexes do not both take the same man.
+    var chosen = pool[0];
+    for (var q2 = 0; q2 < pool.length; q2++) {
+      var l2 = byPosition[pool[q2]] || [];
+      var i2 = (taken[pool[q2]] || 0) + LEAGUE_SIZE - 1;
+      if (i2 < l2.length && l2[i2] === best) { chosen = pool[q2]; break; }
+    }
+    taken[chosen] = (taken[chosen] || 0) + 1;
+    total += best;
+  }
+  return total;
+}
+
+function squadStrip(lineup) {
+  var html = '<div class="squad">';
+  for (var i = 0; i < lineup.length; i++) {
+    var row = lineup[i];
+    if (!row.entry) {
+      html += '<div class="pcard empty-slot"><span class="pslot">' + row.slot
+        + '</span><div class="phead" style="display:inline-block"></div>'
+        + '<span class="pname">empty</span><span class="ppts">—</span></div>';
+      continue;
+    }
+    var p = row.entry.player, w = row.entry.week;
+    var info = HIST[p.gsis_id] || {};
+    var team = TEAMS[p.team] || [];
+    html += '<div class="pcard"' + teamStyle(p.team) + '>'
+      + (team[2] ? '<img class="wm" src="' + esc(team[2]) + '" alt="" loading="lazy" '
+          + 'onerror="this.hidden=true">' : '')
+      + '<span class="pslot">' + row.slot + '</span>'
+      + (info.img ? '<img class="phead" src="' + esc(info.img) + '" alt="" '
+          + 'loading="lazy" onerror="this.hidden=true">' : '')
+      + '<span class="pname">' + esc(p.name) + '</span>'
+      + '<span class="ppts">' + row.entry.points.toFixed(1) + '</span>'
+      + '<span class="pmatch">' + esc(p.team)
+      + (w.opponent ? (w.is_home ? ' vs ' : ' @ ') + esc(w.opponent) : '') + '</span>'
+      + '</div>';
+  }
+  return html + '</div>';
+}
+
+function renderStartSit() {
+  var entries = rosterEntries();
+  var box = document.getElementById('lineup');
+  var benchBox = document.getElementById('bench');
+  if (!entries.length) {
+    box.innerHTML = '<div class="empty">No players yet — add some on the Roster tab.</div>';
+    benchBox.innerHTML = '';
+    return;
+  }
+  var result = optimize(entries);
+  setBandScale(entries);
+  var html = squadStrip(result.lineup);
+  html += '<div class="scroll"><table>' + TABLE_HEAD + '<tbody>';
+  for (var i = 0; i < result.lineup.length; i++) {
+    var row = result.lineup[i];
+    if (!row.entry) {
+      html += '<tr><td class="l"><span class="slotname">' + row.slot
+        + '</span><span style="color:var(--muted)">empty</span></td>'
+        + '<td colspan="7"></td></tr>';
+      continue;
+    }
+    html += playerRow(row.entry, { lead: row.slot, cls: 'filled' });
+  }
+  html += '</tbody></table></div>';
+
+  var par = benchmarkLineup(state.week);
+  var gap = par ? result.total - par : 0;
+  var scale = Math.max(result.total, par) * 1.15 || 1;
+  html += '<div class="hero"><p class="total" style="margin:10px 0 0">'
+    + result.total.toFixed(1) + ' <span>projected points</span></p>'
+    + (par ? '<div class="bar" title="Your lineup against a middling '
+        + LEAGUE_SIZE + '-team starting lineup"><i style="width:'
+        + Math.round(100 * result.total / scale) + '%"></i>'
+        + '<b style="left:' + Math.round(100 * par / scale) + '%"></b></div>' : '')
+    + '</div>';
+  if (par) {
+    html += '<div class="note">A middling ' + LEAGUE_SIZE + '-team starting lineup '
+      + 'projects <b>' + par.toFixed(1) + '</b> this week, so you are '
+      + (Math.abs(gap) < 3
+          ? 'right about level with it'
+          : '<b>' + Math.abs(gap).toFixed(1) + ' points ' + (gap > 0 ? 'ahead' : 'behind')
+            + '</b>')
+      + '. Computed from this week’s projections under your scoring and your slots '
+      + '— not the usual 125-a-week rule of thumb, which assumes full PPR and '
+      + 'somebody else’s lineup.</div>';
+  }
+  box.innerHTML = html;
+
+  if (!result.bench.length) { benchBox.innerHTML = '<div class="empty">Nobody benched.</div>'; return; }
+  var bench = '<div class="scroll"><table>' + TABLE_HEAD + '<tbody class="bench">';
+  for (var b = 0; b < result.bench.length; b++) bench += playerRow(result.bench[b]);
+  benchBox.innerHTML = bench + '</tbody></table></div>';
+}
+
+function renderRankings() {
+  var position = document.getElementById('rankpos').value;
+  var limit = +document.getElementById('ranklimit').value;
+  var rows = [];
+  for (var i = 0; i < PLAYERS.length; i++) {
+    var p = PLAYERS[i];
+    var match = position === 'FLEX' ? FLEX_OK[p.position] : p.position === position;
+    if (!match) continue;
+    var entry = entryFor(p, state.week);
+    if (!entry || entry.week.is_bye) continue;
+    rows.push(entry);
+  }
+  rows.sort(function (a, b) { return b.points - a.points; });
+  rows = rows.slice(0, limit);
+  setBandScale(rows);
+  var showWhy = document.getElementById('showwhy').checked;
+  var html = '<table>' + TABLE_HEAD.replace('<th class="l">Player</th>',
+    '<th>#</th><th class="l">Player</th>') + '<tbody>';
+  for (var r = 0; r < rows.length; r++) {
+    html += playerRow(rows[r], { rank: r + 1, cls: showWhy ? 'nb' : '' });
+    if (showWhy) {
+      var lines = commentary(rows[r]);
+      html += '<tr class="why"><td></td><td colspan="7" class="l">'
+        + (lines.length ? lines.join(' ') : '&nbsp;') + '</td></tr>';
+    }
+  }
+  document.getElementById('rankings').innerHTML = html + '</tbody></table>';
+  var effects = FACTS.matchup_effect || {}, bits = [];
+  var order = ['QB', 'RB', 'WR', 'TE'];
+  for (var m = 0; m < order.length; m++) {
+    if (effects[order[m]]) {
+      bits.push(order[m] + ' ' + effects[order[m]].swing_points.toFixed(1) + ' pts');
+    }
+  }
+  document.getElementById('heatKey').innerHTML =
+    '<b>Reading the odds column.</b> The two marks are set around each player’s own '
+    + 'level — roughly half what he is projected for, and roughly what he is projected '
+    + 'for — so they move with him instead of holding a 7-point receiver to a '
+    + '20-point bar. “28% under 10 · 44% over 20” means that in 100 weeks like this '
+    + 'one he collapses to single digits 28 times and clears 20 in 44 of them. The '
+    + 'percentages come from the model’s own walk-forward misses at his position and '
+    + 'projection level, which is the same thing that makes 60% of real results land '
+    + 'inside the floor and ceiling.';
+
+  document.getElementById('matchupnote').innerHTML =
+    'Matchup is applied per position, and the sizes differ a lot — points of swing '
+    + 'between the friendliest and nastiest defence: <b>' + bits.join(' · ') + '</b>. '
+    + "A running back matchup carries roughly 2.8x a receiver's. "
+    + (FACTS.teammate_absence_note
+       ? 'Teammate-absence lift ' + esc(FACTS.teammate_absence_note) + '.' : '');
+}
+
+/* ------------------------------------------------------------------ *
+ * Season betting lines.
+ *
+ * A sportsbook's number for the whole season, which is the question a drafter is
+ * actually asking and the one a weekly projection hides. Shown, never used: nothing
+ * here feeds a projection, a ranking or the optimizer.
+ *
+ * The two percentages are the point. The book's is de-vigged, so it is what the book
+ * really thinks rather than what it charges. Ours is read off the model's own measured
+ * season-total error — see lines.py — which is why it sits near 50% so often. A season
+ * total is one number carrying every injury and role change in it, and pretending to
+ * 85% confidence about one would be a lie the model cannot back.
+ * ------------------------------------------------------------------ */
+var LINES = (DATA.facts && DATA.facts.lines) || {};
+
+var LINE_STATS = {
+  QB: [['pass_yd', 'Passing yards'], ['pass_td', 'Passing TDs'],
+       ['rush_yd', 'Rushing yards']],
+  RB: [['rush_yd', 'Rushing yards'], ['rec_yd', 'Receiving yards'],
+       ['rec', 'Receptions'], ['rush_td', 'Rushing TDs']],
+  WR: [['rec_yd', 'Receiving yards'], ['rec', 'Receptions'],
+       ['rec_td', 'Receiving TDs']],
+  TE: [['rec_yd', 'Receiving yards'], ['rec', 'Receptions'],
+       ['rec_td', 'Receiving TDs']]
+};
+
+/* Why we land where we land, in sentences, from numbers already on the row.
+   Every clause traces to something measured: last season's actual, the games we expect
+   him to play, how his offence projects against what that offence really did, and
+   whether he moved. No scouting opinions — nothing here knows about a new coordinator
+   or a rebuilt line, and inventing one would poison the clauses that are real. */
+var OUTLOOK = (DATA.facts && DATA.facts.outlook) || {};
+var HEALTHY = (DATA.facts && DATA.facts.healthy) || {};
+var TRENCH = (DATA.facts && DATA.facts.trenches) || {};
+
+function lineCommentary(player, stat, unit, e) {
+  var bits = [];
+
+  if (e.waspg !== undefined && e.was !== undefined) {
+    bits.push('Last season ' + e.was.toFixed(0) + ' ' + unit + ' in ' + e.wasg
+      + ' games (' + e.waspg.toFixed(1) + ' a game).');
+  } else {
+    bits.push('No ' + unit + ' on record last season — rookie, hurt, or a different '
+      + 'role.');
+  }
+
+  if (e.pg !== null && e.games) {
+    bits.push('We expect <b>' + e.pg.toFixed(1) + ' a game</b> over ' + e.games.toFixed(1)
+      + ' games — a starter misses two or three, and the line is a season total, so '
+      + 'those count. That is ' + e.ours.toFixed(0) + ' for the year.');
+  }
+
+  if (e.waspg !== undefined && e.pg !== null && e.waspg > 0) {
+    var shift = e.pg / e.waspg - 1;
+    if (Math.abs(shift) >= 0.08) {
+      bits.push('That is ' + Math.round(Math.abs(shift) * 100) + '% '
+        + (shift > 0 ? 'more' : 'less') + ' per game than last year.');
+    }
+  }
+
+  /* WHO WAS ACTUALLY ON THE FIELD, before any claim about the offence.
+     Reading last season's total as a fact about the offence is how this got Baltimore
+     backwards: they threw for less because Lamar Jackson missed four games, and the
+     baseline quietly blamed the offence for it. The split is stated first so the
+     trend that follows is understood against the right number. */
+  var split = (HEALTHY[player.team] || {})[stat];
+  if (split && split.short !== null && split.missed >= 3) {
+    var gap = split.full - split.short;
+    if (Math.abs(gap) / Math.max(split.full, 1) >= 0.1) {
+      bits.push('<b>Read last season carefully.</b> ' + esc(player.team) + ' managed '
+        + split.full.toFixed(0) + ' ' + unit + ' a game in the ' + split.played
+        + ' games ' + esc(split.qb || split.who) + ' played, and '
+        + split.short.toFixed(0) + ' in the ' + split.missed + ' he did not — so the '
+        + 'raw season total understates what this offence does at full strength.');
+    }
+  }
+
+  /* Relative, not absolute — see lines.team_outlook. Every rostered backup carries a
+     projection that assumes he plays, so the raw team total is inflated for all 32
+     teams alike; only the comparison between them survives that. The baseline is now
+     the full-strength rate, so this is no longer a proxy for who got hurt. */
+  var team = (OUTLOOK[player.team] || {})[stat];
+  if (team !== undefined && Math.abs(team - 1) >= 0.06) {
+    bits.push('Against what they did at full strength last season, the '
+      + esc(player.team) + ' ' + unit + ' game is trending '
+      + (team > 1 ? 'up' : 'down') + ' by ' + Math.round(Math.abs(team - 1) * 100)
+      + '% more than the average team, so there is '
+      + (team > 1 ? 'more' : 'less') + ' to go round.');
+  }
+
+  /* The offensive line, with its measured size attached. It is small — 2.1 yards a
+     game for the rebuild, 2.4 for health — and saying so is the point: the narrative
+     around lines is far larger than the effect. */
+  if (stat === 'rush_yd' || stat === 'rush_td') {
+    var line = (TRENCH.teams || {})[player.team];
+    if (line) {
+      var pieces = [];
+      if (line.upgrade !== undefined && Math.abs(line.upgrade) >= 0.6) {
+        pieces.push('added ' + (line.upgrade > 0 ? '' : 'lost ')
+          + Math.abs(line.upgrade).toFixed(1) + ' starting linemen'
+          + (line.upgrade > 0 ? ' worth of experience' : ''));
+      }
+      if (line.available !== undefined && line.available <= 0.8) {
+        pieces.push('their five main linemen were available for only '
+          + Math.round(line.available * 100) + '% of games last year');
+      }
+      if (pieces.length) {
+        bits.push('<b>Up front:</b> ' + pieces.join(', ') + '. Measured across '
+          + '2019–2025 that is worth about two rushing yards a game — real, and far '
+          + 'smaller than the way people talk about it.');
+      }
+    }
+  }
+
+  var moved = (CTX.moved || {})[player.gsis_id];
+  if (moved) {
+    bits.push('New team (' + esc(moved.from) + ' to ' + esc(moved.to)
+      + '), which measures at about a point a game <i>down</i>, not up.');
+  }
+  var qb = (CTX.qbs || {})[player.team];
+  if (qb && player.position !== 'QB') {
+    bits.push('New quarterback (' + esc(qb.from) + ' to ' + esc(qb.to)
+      + ') — shown because you want to know, but it moves nothing: measured, a '
+      + 'quarterback change predicts neither direction.');
+  }
+  return bits.join(' ');
+}
+
+function renderLines() {
+  var position = document.getElementById('seasonpos').value;
+  var wanted = LINE_STATS[position] || [];
+  var host = document.getElementById('linesTable');
+  var note = document.getElementById('linesNote');
+
+  /* The market picker follows the position, because the markets differ: a quarterback
+     has no receptions line and a receiver has no passing one. */
+  var picker = document.getElementById('seasonstat');
+  var options = '';
+  for (var w = 0; w < wanted.length; w++) {
+    options += '<option value="' + wanted[w][0] + '">' + wanted[w][1] + '</option>';
+  }
+  if (picker.getAttribute('data-for') !== position) {
+    picker.innerHTML = options;
+    picker.setAttribute('data-for', position);
+  }
+  var stat = picker.value || (wanted[0] && wanted[0][0]);
+  var label = '';
+  for (var k = 0; k < wanted.length; k++) if (wanted[k][0] === stat) label = wanted[k][1];
+  var unit = label.toLowerCase();
+
+  var rows = [];
+  for (var i = 0; i < PLAYERS.length; i++) {
+    var p = PLAYERS[i];
+    if (p.position !== position) continue;
+    var entry = (LINES[p.gsis_id] || {})[stat];
+    if (entry) rows.push({ p: p, e: entry });
+  }
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">No ' + esc(unit) + ' lines posted for '
+      + esc(position) + ' yet. Books put season markets up through the summer.</div>';
+    note.textContent = '';
+    return;
+  }
+  rows.sort(function (a, b) { return b.e.line - a.e.line; });
+
+  var html = '<table><thead><tr><th class="l">Player</th><th>Line</th>'
+    + '<th>We project</th><th>Per game</th><th class="l">Lean</th>'
+    + '</tr></thead><tbody>';
+  for (var r = 0; r < rows.length; r++) {
+    var row = rows[r], e = row.e;
+    var edge = (e.p !== null && e.book !== null) ? e.p - e.book : null;
+    var lean = '<span class="slot">—</span>';
+    if (e.p !== null) {
+      /* Only call it a lean when the disagreement is bigger than the width of the
+         error distribution behind our own number. Below that, we agree. */
+      lean = (edge !== null && Math.abs(edge) >= 0.08)
+        ? '<span class="tag ' + (edge > 0 ? 'good' : 'bad') + '">'
+          + (edge > 0 ? 'OVER' : 'UNDER') + '</span>'
+        : '<span class="slot">line looks right</span>';
+    }
+    html += '<tr class="nb"><td class="l who"' + teamStyle(row.p.team) + '>'
+      + avatar(row.p) + chip(row.p.position) + esc(row.p.name) + ' '
+      + teamBadge(row.p.team) + '</td>'
+      + '<td><b>' + e.line.toFixed(1) + '</b></td>'
+      + '<td>' + (e.ours === null ? '—' : e.ours.toFixed(0)) + '</td>'
+      + '<td>' + (e.pg === null ? '—' : e.pg.toFixed(1)) + '</td>'
+      + '<td class="l">' + lean + '</td></tr>'
+      + '<tr class="why"><td colspan="5" class="l">'
+      + lineCommentary(row.p, stat, unit, e) + '</td></tr>';
+  }
+  host.innerHTML = html + '</tbody></table>';
+  note.innerHTML = esc((DATA.facts && DATA.facts.lines_note) || '')
+    + ' The lean compares us against the book price with its margin stripped out, so a '
+    + '−110/−110 market counts as a true coin flip rather than the 52.4% each side that '
+    + 'the raw price implies.'
+    + '<br><br><b>Read the leans sceptically — including ours.</b> We land on the under '
+    + 'in about four markets out of five, and a disagreement that lopsided is far more '
+    + 'likely to be something we have not measured than an edge over a sportsbook. Two '
+    + 'things are known: our season totals multiply by the games a player should '
+    + 'actually play (14.5 of 17 for a starter, not 17), and our per-game rates run '
+    + 'about 10% high for stars, which the calibration removes. For contrast, adding up '
+    + 'Sleeper’s weekly projections lands 14–16% <i>above</i> these lines — '
+    + 'but only because each of those weeks assumes he plays, so the total describes a '
+    + 'player who never misses a game. This panel is for interest. It is not advice, '
+    + 'and it is not in your projections.';
+}
+
+/* Season receiving work for every back, summed from the weekly projections already in
+   the payload. No new data needed — the numbers were always there, just never added up
+   anywhere a person could see them. */
+function renderCatchingBacks() {
+  var rows = [];
+  for (var i = 0; i < PLAYERS.length; i++) {
+    var p = PLAYERS[i];
+    if (p.position !== 'RB') continue;
+    var recYd = 0, rec = 0, rushYd = 0, games = 0;
+    for (var wk in p.weeks) {
+      if (!Object.prototype.hasOwnProperty.call(p.weeks, wk)) continue;
+      var w = p.weeks[wk];
+      if (w.is_bye) continue;
+      var s = w.stats || {};
+      if (!s.rush_att && !s.rec_tgt) continue;
+      recYd += s.rec_yd || 0;
+      rec += s.rec || 0;
+      rushYd += s.rush_yd || 0;
+      games++;
+    }
+    if (games >= 8 && recYd > 0) {
+      rows.push({ p: p, recYd: recYd, rec: rec, rushYd: rushYd, games: games });
+    }
+  }
+  if (!rows.length) {
+    document.getElementById('catchingBacks').innerHTML =
+      '<div class="empty">No back projections available.</div>';
+    return;
+  }
+  rows.sort(function (a, b) { return b.recYd / b.games - a.recYd / a.games; });
+  rows = rows.slice(0, 30);
+
+  var top = rows[0].recYd / rows[0].games;
+  var html = '<table><thead><tr><th>#</th><th class="l">Player</th>'
+    + '<th>Rec yd / game</th><th>Season rec yd</th><th>Catches</th>'
+    + '<th>Rush yd / game</th><th class="l">Share of his yards</th>'
+    + '</tr></thead><tbody>';
+  for (var r = 0; r < rows.length; r++) {
+    var row = rows[r];
+    var perGame = row.recYd / row.games;
+    var share = row.recYd / (row.recYd + row.rushYd);
+    /* One bar, one hue, scaled to the leader — a magnitude comparison, so sequential
+       colour and a common scale rather than a per-row rescale. */
+    var bar = '<span class="meter" title="' + Math.round(share * 100)
+      + '% of his yards come through the air"><i style="width:'
+      + Math.round(share * 100) + '%"></i></span> '
+      + '<span class="usage">' + Math.round(share * 100) + '% receiving</span>';
+    html += '<tr>' + rankCell(r + 1)
+      + '<td class="l who"' + teamStyle(row.p.team) + '>' + avatar(row.p)
+      + chip('RB') + esc(row.p.name) + ' ' + teamBadge(row.p.team) + '</td>'
+      + '<td><b>' + perGame.toFixed(1) + '</b></td>'
+      + '<td>' + Math.round(row.recYd) + '</td>'
+      + '<td>' + Math.round(row.rec) + '</td>'
+      + '<td>' + (row.rushYd / row.games).toFixed(1) + '</td>'
+      + '<td class="l">' + bar + '</td></tr>';
+  }
+  document.getElementById('catchingBacks').innerHTML = html + '</tbody></table>';
+}
+
+/* ------------------------------------------------------------------ *
+ * Waivers.
+ *
+ * The ranking everyone publishes is "best available player", and it is the wrong
+ * question. A pickup is only worth a roster spot if he would actually start for
+ * YOU — the third-best available receiver is worth nothing to a team already
+ * three deep at receiver, and a mediocre tight end can be worth six points a
+ * week to a team starting nobody there.
+ *
+ * So the number here is LINEUP GAIN: re-run the optimizer with the player added
+ * and take the difference. That is why it needs no new data — the optimizer, the
+ * roster and the projections are all already in the browser — and why it answers
+ * the question the published lists cannot.
+ *
+ * "Available" differs by league, which was the whole difficulty. With a league
+ * imported, it means nobody in your league owns him. Without one, it means he is
+ * not on your roster, and the page says which of the two it is doing rather than
+ * quietly presenting the weaker version as the real thing.
+ * ------------------------------------------------------------------ */
+var WAIVER_LIMIT = 140;   // candidates put through the optimizer, by raw projection
+
+function horizonWeeks(count) {
+  var out = [], all = DATA.weeks, start = -1;
+  for (var i = 0; i < all.length; i++) if (String(all[i]) === state.week) start = i;
+  if (start < 0) start = 0;
+  for (var w = start; w < all.length && out.length < count; w++) out.push(all[w]);
+  return out;
+}
+
+function lineupTotal(entries) {
+  return optimize(entries).total;
+}
+
+function renderWaivers() {
+  var position = document.getElementById('wpos').value;
+  var horizon = +document.getElementById('whorizon').value;
+  var weeks = horizonWeeks(horizon);
+  var status = document.getElementById('waiverStatus');
+  var host = document.getElementById('waiverTable');
+  var note = document.getElementById('waiverNote');
+
+  var owned = rosteredElsewhere();
+  var mine = {};
+  for (var r = 0; r < state.roster.length; r++) mine[state.roster[r]] = true;
+
+  if (!state.roster.length) {
+    status.innerHTML = '';
+    host.innerHTML = '<div class="empty">Add your roster first — on the Roster tab, '
+      + 'or by importing your league. Without it there is nothing to improve, and '
+      + '"best player available" is a list you can get anywhere.</div>';
+    note.textContent = '';
+    return;
+  }
+
+  status.innerHTML = LEAGUE && LEAGUE.teams
+    ? '<span class="tag good">' + esc(LEAGUE.name || 'league') + ' imported</span> '
+      + 'Everyone owned by the other ' + (LEAGUE.teams.length - 1)
+      + ' teams is excluded, so this really is your waiver wire.'
+    : '<span class="tag warn">no league imported</span> Showing everyone not on your '
+      + 'roster. Some of them are owned in your league — import it on the Roster tab '
+      + 'and this list becomes exact.';
+
+  /* Shortlist by raw projection over the horizon before doing the expensive part.
+     Running the optimizer for a thousand players x eighteen weeks would be pointless
+     as well as slow: a player who cannot crack the top 140 on raw points is not about
+     to improve anybody's starting lineup. */
+  var candidates = [];
+  for (var i = 0; i < PLAYERS.length; i++) {
+    var p = PLAYERS[i];
+    if (mine[p.gsis_id] || owned[p.gsis_id]) continue;
+    if (position !== 'ALL' && p.position !== position) continue;
+    var raw = 0, played = 0;
+    for (var w = 0; w < weeks.length; w++) {
+      var entry = entryFor(p, String(weeks[w]));
+      if (entry && !entry.week.is_bye) { raw += entry.points; played++; }
+    }
+    if (played) candidates.push({ p: p, raw: raw });
+  }
+  candidates.sort(function (a, b) { return b.raw - a.raw; });
+  candidates = candidates.slice(0, WAIVER_LIMIT);
+
+  // The lineup as it stands, week by week, is the thing every candidate is measured
+  // against. Computed once rather than once per candidate.
+  var baseline = [], rosterByWeek = [];
+  for (var w2 = 0; w2 < weeks.length; w2++) {
+    var week = String(weeks[w2]), entries = [];
+    for (var r2 = 0; r2 < state.roster.length; r2++) {
+      var owner = BY_ID[state.roster[r2]];
+      if (!owner) continue;
+      var e = entryFor(owner, week);
+      if (e) entries.push(e);
+    }
+    rosterByWeek.push(entries);
+    baseline.push(lineupTotal(entries));
+  }
+
+  var rows = [];
+  for (var c = 0; c < candidates.length; c++) {
+    var player = candidates[c].p, gain = 0, starts = 0, firstWeekGain = 0;
+    for (var w3 = 0; w3 < weeks.length; w3++) {
+      var candidateEntry = entryFor(player, String(weeks[w3]));
+      if (!candidateEntry || candidateEntry.week.is_bye) continue;
+      var withHim = rosterByWeek[w3].concat([candidateEntry]);
+      var delta = lineupTotal(withHim) - baseline[w3];
+      if (delta > 0.01) starts++;
+      if (w3 === 0) firstWeekGain = delta;
+      gain += delta;
+    }
+    if (gain > 0.05) {
+      rows.push({ p: player, gain: gain, starts: starts, first: firstWeekGain,
+                  raw: candidates[c].raw, weeks: weeks.length });
+    }
+  }
+
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">Nobody available improves your lineup over '
+      + 'this horizon. That is a real answer, not an empty table — your starters are '
+      + 'already better than anything on the wire.</div>';
+    note.textContent = '';
+    return;
+  }
+  rows.sort(function (a, b) { return b.gain - a.gain; });
+  rows = rows.slice(0, 40);
+
+  var label = horizon === 1 ? 'this week' : 'over ' + weeks.length + ' weeks';
+  var html = '<table><thead><tr><th>#</th><th class="l">Player</th>'
+    + '<th>Points added ' + esc(label) + '</th><th>Weeks he starts</th>'
+    + '<th>This week</th><th class="l">Why</th></tr></thead><tbody>';
+  for (var k = 0; k < rows.length; k++) {
+    var row = rows[k];
+    var why = row.starts === 0
+      ? '<span class="slot">bench depth only</span>'
+      : row.starts === row.weeks
+        ? '<span class="tag good">starts every week</span>'
+        : '<span class="tag">starts ' + row.starts + ' of ' + row.weeks + '</span>';
+    if (row.first <= 0.01 && row.starts) {
+      why += ' <span class="slot">not this week — later</span>';
+    }
+    html += '<tr>' + rankCell(k + 1)
+      + '<td class="l who"' + teamStyle(row.p.team) + '>' + avatar(row.p)
+      + chip(row.p.position) + esc(row.p.name) + ' ' + teamBadge(row.p.team) + '</td>'
+      + '<td><b>+' + row.gain.toFixed(1) + '</b></td>'
+      + '<td>' + row.starts + '</td>'
+      + '<td>' + (row.first > 0.01 ? '+' + row.first.toFixed(1)
+          : '<span class="slot">—</span>') + '</td>'
+      + '<td class="l">' + why + '</td></tr>';
+  }
+  host.innerHTML = html + '</tbody></table>';
+  note.innerHTML = '<b>“Points added” is what he adds to your starting lineup</b>, not '
+    + 'what he scores. A 12-point receiver is worth nothing to you if your worst '
+    + 'starting receiver already projects 12 — and a modest tight end is worth six a '
+    + 'week if you are starting nobody there. That is why this list will not match the '
+    + 'waiver rankings elsewhere, and why it is the one worth acting on. Computed by '
+    + 're-running your optimal lineup with each player added.';
+}
+
+function renderRoster() {
+  var query = document.getElementById('search').value.toLowerCase().trim();
+  var owned = rosteredElsewhere();
+  var results = [];
+  if (query) {
+    for (var i = 0; i < PLAYERS.length && results.length < 60; i++) {
+      if (PLAYERS[i].name.toLowerCase().indexOf(query) >= 0) results.push(PLAYERS[i]);
+    }
+  }
+  var html = '';
+  for (var r = 0; r < results.length; r++) {
+    var p = results[r], on = state.roster.indexOf(p.gsis_id) >= 0;
+    var entry = entryFor(p, state.week);
+    html += '<div class="row" style="justify-content:space-between;padding:5px 0;'
+      + 'border-bottom:1px solid var(--line)"><span>' + chip(p.position)
+      + esc(p.name) + ' ' + teamBadge(p.team)
+      + (owned[p.gsis_id]
+         ? ' <span class="tag">rostered by ' + esc(owned[p.gsis_id]) + '</span>' : '')
+      + '</span><span>' + (entry ? entry.points.toFixed(1) : '—')
+      + ' <button data-add="' + esc(p.gsis_id) + '"' + (on ? ' disabled' : '')
+      + '>' + (on ? 'added' : 'add') + '</button></span></div>';
+  }
+  document.getElementById('searchResults').innerHTML =
+    html || '<div class="empty">' + (query ? 'No matches.' : 'Type a name to search.') + '</div>';
+
+  var list = '';
+  var entries = rosterEntries();
+  for (var e = 0; e < entries.length; e++) {
+    var it = entries[e];
+    list += '<div class="row" style="justify-content:space-between;padding:5px 0;'
+      + 'border-bottom:1px solid var(--line)"><span>' + chip(it.position)
+      + esc(it.player.name) + '</span>'
+      + '<span>' + it.points.toFixed(1) + ' <button data-remove="'
+      + esc(it.player.gsis_id) + '">remove</button></span></div>';
+  }
+  document.getElementById('rosterList').innerHTML =
+    list || '<div class="empty">Empty.</div>';
+  document.getElementById('rosterCount').textContent = state.roster.length;
+}
+
+/* ------------------------------------------------------------------ *
+ * League import — in the browser, at use time.
+ *
+ * An earlier version of this only worked at build time, on the assumption that
+ * a page served from file:// could not call these APIs. That assumption was
+ * wrong and was never tested. Both providers send permissive CORS headers:
+ * Sleeper answers `Access-Control-Allow-Origin: *`, and ESPN echoes whatever
+ * Origin it is given — including `null`, which is what a file:// page sends —
+ * together with `Access-Control-Allow-Credentials: true`.
+ *
+ * That last header is what makes private ESPN leagues work with no setup: the
+ * request goes out with `credentials: 'include'`, so a browser already signed
+ * in to ESPN sends its own session. Nothing to paste. Browsers that block
+ * third-party cookies will refuse, and the error path says so and points at
+ * the build-time importer as the fallback.
+ *
+ * Everything is stored per league in localStorage, so different leagues on
+ * different machines stay independent.
+ * ------------------------------------------------------------------ */
+var LEAGUE = state.league || DATA.league || null;
+
+var HELP = {
+  sleeper: 'Sleeper: the long number in your league URL — '
+    + 'sleeper.com/leagues/<b>1234567890123456</b>/team. No sign-in needed.',
+  espn: 'ESPN: the leagueId in your league URL — '
+    + 'fantasy.espn.com/football/league?leagueId=<b>123456</b>. '
+    + 'Private leagues work if this browser is already signed in to ESPN.'
+};
+
+function setStatus(text, kind) {
+  var node = document.getElementById('importstatus');
+  node.innerHTML = text ? '<span class="tag ' + (kind || '') + '">' + kind
+    + '</span> ' + text : '';
+}
+
+/* Resolve a provider's player id onto our rows. The foreign keys ship with the
+   data precisely so this can happen here. */
+function indexBy(field) {
+  var out = {};
+  for (var i = 0; i < PLAYERS.length; i++) {
+    var value = PLAYERS[i][field];
+    if (value) out[String(value)] = PLAYERS[i];
+  }
+  return out;
+}
+
+function importSleeper(id, done) {
+  var base = 'https://api.sleeper.app/v1/league/' + encodeURIComponent(id);
+  Promise.all([
+    fetch(base).then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); }),
+    fetch(base + '/rosters').then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); }),
+    fetch(base + '/users').then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+  ]).then(function (all) {
+    var meta = all[0], rosters = all[1], users = all[2];
+    var bySleeper = indexBy('sleeper_id'), names = {}, unresolved = 0;
+    for (var u = 0; u < users.length; u++) {
+      names[String(users[u].user_id)] =
+        (users[u].metadata && users[u].metadata.team_name) || users[u].display_name || '';
+    }
+    var teams = [];
+    for (var r = 0; r < rosters.length; r++) {
+      var ids = rosters[r].players || [], players = [];
+      for (var p = 0; p < ids.length; p++) {
+        var hit = bySleeper[String(ids[p])];
+        if (hit) players.push(hit.gsis_id); else unresolved++;
+      }
+      teams.push({ team_id: String(rosters[r].roster_id),
+                   name: names[String(rosters[r].owner_id)] || ('Team ' + rosters[r].roster_id),
+                   players: players });
+    }
+    done(null, { platform: 'sleeper', league_id: String(id),
+                 name: (meta && meta.name) || '', teams: teams, unresolved: unresolved });
+  }).catch(function (err) {
+    done(err === 404 ? 'No Sleeper league with that ID. It is the long number in your '
+                     + 'league URL.'
+                     : 'Could not reach Sleeper (' + err + ').');
+  });
+}
+
+function importEspn(id, done) {
+  var url = 'https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/'
+    + DATA.season + '/segments/0/leagues/' + encodeURIComponent(id)
+    + '?view=mTeam&view=mRoster';
+  /* credentials: 'include' is the whole trick for private leagues — ESPN sends
+     Access-Control-Allow-Credentials: true, so a signed-in browser authenticates
+     itself and nothing needs pasting. */
+  fetch(url, { credentials: 'include' })
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+    .then(function (payload) {
+      var byEspn = indexBy('espn_id'), teams = [], unresolved = 0;
+      var list = payload.teams || [];
+      for (var t = 0; t < list.length; t++) {
+        var entries = (list[t].roster && list[t].roster.entries) || [], players = [];
+        for (var e = 0; e < entries.length; e++) {
+          var hit = byEspn[String(entries[e].playerId)];
+          if (hit) players.push(hit.gsis_id); else unresolved++;
+        }
+        teams.push({ team_id: String(list[t].id),
+                     name: list[t].name
+                       || ((list[t].location || '') + ' ' + (list[t].nickname || '')).replace(/^ | $/g, '')
+                       || ('Team ' + list[t].id),
+                     players: players });
+      }
+      done(null, { platform: 'espn', league_id: String(id),
+                   name: (payload.settings && payload.settings.name) || '',
+                   teams: teams, unresolved: unresolved });
+    })
+    .catch(function (err) {
+      if (err === 401 || err === 403) {
+        done('ESPN refused the request. That means the league is private and this '
+           + 'browser is not signed in to ESPN — open fantasy.espn.com, sign in, and '
+           + 'try again. If your browser blocks third-party cookies it will keep '
+           + 'refusing; use the build-time importer in that case '
+           + '(build.py --espn-league ' + esc(String(id)) + ' --espn-cookies …).');
+      } else if (err === 404) {
+        done('No ESPN league ' + esc(String(id)) + ' in ' + DATA.season + '.');
+      } else {
+        done('Could not reach ESPN (' + err + ').');
+      }
+    });
+}
+
+function renderLeague() {
+  document.getElementById('importhelp').innerHTML =
+    HELP[document.getElementById('platform').value];
+  var pick = document.getElementById('teamPick');
+  if (!LEAGUE || !LEAGUE.teams || !LEAGUE.teams.length) { pick.hidden = true; return; }
+  pick.hidden = false;
+  var select = document.getElementById('leagueteam'), html = '';
+  for (var i = 0; i < LEAGUE.teams.length; i++) {
+    html += '<option value="' + i + '">' + esc(LEAGUE.teams[i].name)
+      + ' (' + LEAGUE.teams[i].players.length + ')</option>';
+  }
+  select.innerHTML = html;
+  if (state.leagueTeam !== undefined && state.leagueTeam < LEAGUE.teams.length) {
+    select.value = String(state.leagueTeam);
+  }
+  document.getElementById('leaguemeta').textContent =
+    LEAGUE.platform + (LEAGUE.name ? ' · ' + LEAGUE.name : '')
+    + ' · ' + LEAGUE.teams.length + ' teams'
+    + (LEAGUE.unresolved ? ' · ' + LEAGUE.unresolved + ' players unmatched' : '');
+}
+
+/* gsis ids owned by any team other than yours — the free-agent filter. */
+function rosteredElsewhere() {
+  var owned = {};
+  if (!LEAGUE || !LEAGUE.teams) return owned;
+  for (var i = 0; i < LEAGUE.teams.length; i++) {
+    if (state.leagueTeam !== undefined && i === state.leagueTeam) continue;
+    var players = LEAGUE.teams[i].players;
+    for (var p = 0; p < players.length; p++) owned[players[p]] = LEAGUE.teams[i].name;
+  }
+  return owned;
+}
+
+var DRAFT = DATA.draft || null;
+
+/* VOR in plain words, using this league's real numbers.
+   "Points above replacement" is jargon that sounds like it explains itself and does
+   not. The abstract definition never lands; the same idea with two actual players in
+   it lands immediately, so the explainer is built from the live table rather than
+   written as a static paragraph. */
+function vorExplainer(size, teams) {
+  var qb = size.cliffs.QB, rb = size.cliffs.RB;
+  if (!qb || !rb) {
+    return 'VOR is how many points a player scores above the best free replacement '
+      + 'at his own position.';
+  }
+  return '<b>What VOR means.</b> In a ' + teams + '-team league every manager will '
+    + 'start ' + qb.starters + ' quarterback' + (qb.starters === 1 ? '' : 's') + ', so '
+    + 'about ' + qb.starters + ' get drafted and the next one is free on waivers. '
+    + 'VOR asks the only question that matters on draft day: <i>how many points does '
+    + 'this player score above that free guy?</i>'
+    + '<br><br>The best QB is worth ' + qb.top.toFixed(0) + ' points more than the '
+    + 'free QB. The best RB is worth ' + rb.top.toFixed(0) + ' more than the free RB. '
+    + (rb.top > qb.top
+        ? 'So even if the quarterback outscores the running back on the season, the '
+          + 'running back wins you more games — because you can replace the quarterback '
+          + 'for nothing and you cannot replace the back.'
+        : 'That is why the quarterback goes first here even though more running backs '
+          + 'come off the board early.')
+    + '<br><br><b>What a cliff is.</b> The drop column is how many points you lose by '
+    + 'waiting one more pick at that position. A big drop means the good ones are '
+    + 'about to run out — draft ahead of it. A small drop means wait; someone just as '
+    + 'good will still be there.';
+}
+
+function renderDraft() {
+  if (!DRAFT) {
+    document.getElementById('draftPlan').innerHTML =
+      '<div class="empty">No draft tables in this build.</div>';
+    return;
+  }
+  var teams = document.getElementById('dteams').value;
+  var size = DRAFT.sizes[teams];
+  if (!size) return;
+
+  var slotSelect = document.getElementById('dslot');
+  if (slotSelect.options.length !== +teams) {
+    var opts = '';
+    for (var i = 1; i <= +teams; i++) opts += '<option value="' + i + '">Pick ' + i + '</option>';
+    slotSelect.innerHTML = opts;
+  }
+  var slot = slotSelect.value || '1';
+  var plan = size.slots[slot];
+  if (!plan) return;
+
+  var opening = '';
+  for (var r = 0; r < plan.opening.length; r++) {
+    opening += '<span class="chip ' + plan.opening[r] + '">' + plan.opening[r] + '</span>';
+  }
+  document.getElementById('draftPlan').innerHTML =
+    '<p class="total">' + plan.strategy + ' <span>from pick ' + slot
+      + ' in a ' + teams + '-team league</span></p>'
+    + '<p style="margin:6px 0 12px">Rounds 1–5: ' + opening + '</p>'
+    + '<table><tbody>'
+    + '<tr><td class="l">Projected season points</td><td><b>' + plan.points.toFixed(0) + '</b></td></tr>'
+    + '<tr><td class="l">Edge over drafting pure value</td><td><b>' + (plan.edge >= 0 ? '+' : '')
+      + plan.edge.toFixed(0) + '</b> pts'
+      + (Math.abs(plan.edge) < 15 ? ' <span class="tag">within noise</span>' : '')
+      + '</td></tr>'
+    + '</tbody></table>'
+    + '<div class="note">' + esc(size.notes[plan.group] || '') + '</div>';
+
+  var cliffs = '<table><thead><tr><th class="l">Pos</th><th>Startable</th>'
+    + '<th>Top VOR</th><th>Biggest drop</th><th class="l">Draft ahead of</th></tr></thead><tbody>';
+  var order = ['QB', 'RB', 'WR', 'TE'];
+  for (var c = 0; c < order.length; c++) {
+    var info = size.cliffs[order[c]];
+    if (!info) continue;
+    cliffs += '<tr><td class="l">' + chip(order[c]) + '</td><td>' + info.starters
+      + '</td><td>' + info.top.toFixed(0) + '</td><td><b>' + info.cliff.toFixed(0)
+      + '</b></td><td class="l">the ' + order[c] + (info.after + 1) + ' pick</td></tr>';
+  }
+  document.getElementById('draftCliffs').innerHTML = cliffs + '</tbody></table>';
+  document.getElementById('vorNote').innerHTML = vorExplainer(size, teams);
+
+  var position = document.getElementById('dpos').value;
+  var sort = document.getElementById('dsort').value;
+  var rows = [];
+  for (var i = 0; i < PLAYERS.length; i++) {
+    var p = PLAYERS[i];
+    if (position !== 'ALL' && p.position !== position) continue;
+    var vor = (DRAFT.vor[p.gsis_id] || {})[teams];
+    if (vor === undefined) continue;
+    rows.push({ p: p, vor: vor, pts: DRAFT.season_points[p.gsis_id] || 0,
+                adp: DRAFT.adp[p.gsis_id] });
+  }
+  rows.sort(function (a, b) {
+    if (sort === 'adp') return (a.adp || 9999) - (b.adp || 9999);
+    if (sort === 'pts') return b.pts - a.pts;
+    return b.vor - a.vor;
+  });
+  rows = rows.slice(0, 120);
+  var why = document.getElementById('dwhy').checked;
+  /* Per game and expected games sit beside the season total on purpose. A season
+     number alone hides the difference between 15 points across seventeen games and 20
+     across twelve, and that difference is most of what a draft decision turns on. Both
+     feed the season total (rate x games), so the row shows its own arithmetic. */
+  var board = '<table><thead><tr><th>#</th><th class="l">Player</th>'
+    + '<th>ADP</th><th>Per game</th><th>Games</th><th>Season</th><th>VOR</th>'
+    + '<th class="l">Value</th></tr></thead><tbody>';
+  for (var j = 0; j < rows.length; j++) {
+    var row = rows[j];
+    /* Reach or bargain: where the market drafts him against where our board does.
+       This is the one number a draft board exists to show. */
+    var ourRank = j + 1;
+    var gap = row.adp ? Math.round(row.adp - ourRank) : null;
+    var verdict = gap === null ? '<span class="slot">—</span>'
+      : gap >= 12 ? '<span class="tag good">value +' + gap + '</span>'
+      : gap <= -12 ? '<span class="tag bad">reach ' + gap + '</span>'
+      : '<span class="slot">fair</span>';
+    var games = (DRAFT.games || {})[row.p.gsis_id];
+    var perGame = (DRAFT.per_game || {})[row.p.gsis_id];
+    /* Flag the fragile explicitly. Fourteen of seventeen is normal; twelve is a
+       player the season total has already been docked for, and you should know why
+       his number looks lower than his weekly form suggests. */
+    var durability = games === undefined ? '<span class="slot">—</span>'
+      : games < 13 ? '<span class="tag warn">' + games.toFixed(1) + '</span>'
+      : games.toFixed(1);
+    board += '<tr' + (why ? ' class="nb"' : '') + '>' + rankCell(ourRank)
+      + '<td class="l who"' + teamStyle(row.p.team) + '>' + avatar(row.p)
+      + chip(row.p.position) + esc(row.p.name) + ' ' + teamBadge(row.p.team)
+      + '</td><td>' + (row.adp ? row.adp.toFixed(0) : '—') + '</td>'
+      + '<td>' + (perGame === undefined ? '—' : perGame.toFixed(1)) + '</td>'
+      + '<td>' + durability + '</td>'
+      + '<td>' + row.pts.toFixed(0) + '</td><td><b>' + row.vor.toFixed(0) + '</b></td>'
+      + '<td class="l">' + verdict + '</td></tr>';
+    if (why) {
+      var lines = historyLines(row.p);
+      board += '<tr class="why"><td></td><td colspan="7" class="l">'
+        + (lines.length ? lines.join(' ') : '<span class="slot">No '
+          + ((DATA.facts && DATA.facts.history_season) || 'prior')
+          + ' history — rookie or did not play.</span>') + '</td></tr>';
+    }
+  }
+  document.getElementById('draftBoard').innerHTML = board + '</tbody></table>';
+  document.getElementById('draftCaveat').innerHTML =
+    '<b>How a player is valued here.</b> Season points are his projected rate times '
+    + 'the games he should actually play, not the sum of eighteen weeks — nobody plays '
+    + 'eighteen, and market-sized players average 14.5 of 17. Summing every week '
+    + 'overpays the fragile most, because a back with two injury-hit seasons behind '
+    + 'him was being priced for a full one. A <span class="tag warn">flagged</span> '
+    + 'games figure is a player whose total has already been docked for that.'
+    + '<br><br>' + esc(DRAFT.caveat || '');
+}
+
+function renderSettings() {
+  var keys = Scoring.sortedKeys(state.config.per_stat);
+  var html = '';
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i], un = false;
+    for (var u = 0; u < UNPROJECTABLE.length; u++) if (UNPROJECTABLE[u] === key) un = true;
+    html += '<div><label for="s-' + key + '">' + key
+      + (un ? ' <span class="tag warn">not projected</span>' : '') + '</label>'
+      + '<input type="number" step="0.01" id="s-' + key + '" data-stat="' + key
+      + '" value="' + state.config.per_stat[key] + '"></div>';
+  }
+  document.getElementById('scoringGrid').innerHTML = html;
+
+  var slots = '';
+  var order = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'SUPERFLEX', 'K', 'DST'];
+  for (var s = 0; s < order.length; s++) {
+    slots += '<div><label for="slot-' + order[s] + '">' + order[s] + '</label>'
+      + '<input type="number" min="0" max="4" id="slot-' + order[s] + '" data-slot="'
+      + order[s] + '" value="' + (state.slots[order[s]] || 0) + '"></div>';
+  }
+  document.getElementById('slotGrid').innerHTML = slots;
+}
+
+function renderUnprojectable() {
+  var active = [];
+  for (var u = 0; u < UNPROJECTABLE.length; u++) {
+    if (state.config.per_stat[UNPROJECTABLE[u]]) active.push(UNPROJECTABLE[u]);
+  }
+  document.getElementById('unprojectable').innerHTML = active.length
+    ? '<span class="tag warn">' + active.length + ' scoring rule'
+      + (active.length > 1 ? 's' : '') + ' cannot be projected</span> '
+      + active.join(', ') + ' — scored against real results, excluded from projections.'
+    : '';
+}
+
+/* The build stamp, for a person rather than for me.
+   It used to read `built 2026-08-04T02:16:07Z · blend {"own":0.25,...}`, which is
+   debug output. The information is worth keeping — how stale the projections are is a
+   real question, and so is which sources produced them — so it stays, in a form that
+   answers those questions instead of dumping the JSON that happens to hold them. */
+function freshness(stamp) {
+  var when = new Date(stamp);
+  if (isNaN(when.getTime())) return '';
+  var hours = (Date.now() - when.getTime()) / 3600000;
+  if (hours < 1.5) return 'updated just now';
+  if (hours < 36) return 'updated ' + Math.round(hours) + ' hours ago';
+  var days = Math.round(hours / 24);
+  return 'updated ' + days + ' day' + (days === 1 ? '' : 's') + ' ago';
+}
+
+function sourceSummary(weights) {
+  var parts = [], names = { sleeper: 'Sleeper', espn: 'ESPN', own: 'our model' };
+  var keys = ['sleeper', 'espn', 'own'];
+  for (var i = 0; i < keys.length; i++) {
+    if (weights && weights[keys[i]]) {
+      parts.push(Math.round(weights[keys[i]] * 100) + '% ' + names[keys[i]]);
+    }
+  }
+  return parts.join(' · ');
+}
+
+function render() {
+  var meta = document.getElementById('meta');
+  meta.textContent = DATA.season + ' season · ' + PLAYERS.length.toLocaleString()
+    + ' players · ' + freshness(DATA.generated_at);
+  meta.title = 'Projections blend ' + sourceSummary(DATA.blend_weights)
+    + '. Built ' + DATA.generated_at + '.';
+  renderUnprojectable();
+  renderStartSit();
+  renderRankings();
+  renderLines();
+  renderCatchingBacks();
+  renderWaivers();
+  renderRoster();
+  renderLeague();
+  renderDraft();
+  renderSettings();
+  save();
+}
+
+/* ---- events ---- */
+function applyPreset(name) {
+  if (name === 'custom') return;
+  state.config.per_stat.rec = RECEPTION[name];
+  state.config.name = name;
+}
+
+document.addEventListener('click', function (event) {
+  var target = event.target;
+  if (target.dataset.view) {
+    var tabs = document.querySelectorAll('.tab');
+    for (var i = 0; i < tabs.length; i++) {
+      var on = tabs[i] === target;
+      tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
+      document.getElementById('view-' + tabs[i].dataset.view).hidden = !on;
+    }
+    return;
+  }
+  if (target.dataset.add) {
+    if (state.roster.indexOf(target.dataset.add) < 0) state.roster.push(target.dataset.add);
+    render();
+  } else if (target.dataset.remove) {
+    var at = state.roster.indexOf(target.dataset.remove);
+    if (at >= 0) state.roster.splice(at, 1);
+    render();
+  } else if (target.id === 'importleague') {
+    var id = document.getElementById('leagueid').value.replace(/^\s+|\s+$/g, '');
+    if (!id) { setStatus('Enter a league ID first.', 'warn'); return; }
+    var platform = document.getElementById('platform').value;
+    setStatus('Contacting ' + platform + '…', '');
+    var handler = platform === 'sleeper' ? importSleeper : importEspn;
+    handler(id, function (err, result) {
+      if (err) { setStatus(err, 'bad'); return; }
+      LEAGUE = result;
+      state.league = result;
+      state.leagueTeam = undefined;
+      setStatus('Imported ' + result.teams.length + ' teams'
+        + (result.name ? ' from ' + esc(result.name) : '') + '. Pick your team below.',
+        'good');
+      render();
+    });
+  } else if (target.id === 'clearleague') {
+    LEAGUE = null; state.league = null; state.leagueTeam = undefined;
+    setStatus('League cleared.', '');
+    render();
+  } else if (target.id === 'loadteam') {
+    if (LEAGUE && LEAGUE.teams) {
+      var index = +document.getElementById('leagueteam').value;
+      var team = LEAGUE.teams[index];
+      if (team) {
+        state.roster = team.players.slice();
+        state.leagueTeam = index;
+        setStatus('Loaded ' + esc(team.name) + ' — ' + team.players.length
+          + ' players. Everyone owned by the other ' + (LEAGUE.teams.length - 1)
+          + ' teams is now marked as rostered.', 'good');
+        render();
+      }
+    }
+  } else if (target.id === 'reset') {
+    state = defaults();
+    document.getElementById('week').value = state.week;
+    document.getElementById('format').value = state.format;
+    render();
+  }
+});
+
+document.addEventListener('input', function (event) {
+  var target = event.target;
+  if (target.id === 'search') { renderRoster(); return; }
+  if (target.dataset.stat) {
+    state.config.per_stat[target.dataset.stat] = parseFloat(target.value) || 0;
+    state.format = 'custom';
+    document.getElementById('format').value = 'custom';
+    renderUnprojectable(); renderStartSit(); renderRankings(); save();
+    return;
+  }
+  if (target.dataset.slot) {
+    state.slots[target.dataset.slot] = Math.max(0, parseInt(target.value, 10) || 0);
+    renderStartSit(); save();
+  }
+});
+
+/* One table rather than an if-chain. Three controls were silently dead because
+   patches to the chain did not match and nothing complained — a map makes a missing
+   wire visible, and the assertion in init() turns it into an error. */
+var ON_CHANGE = {
+  week:      function (v) { state.week = v; render(); },
+  format:    function (v) { state.format = v; applyPreset(v); render(); },
+  rankpos:   renderRankings,
+  wpos:      renderWaivers,
+  whorizon:  renderWaivers,
+  seasonpos: renderLines,
+  seasonstat: renderLines,
+  ranklimit: renderRankings,
+  showwhy:   renderRankings,
+  platform:  renderLeague,
+  dteams:    function () { document.getElementById('dslot').innerHTML = ''; renderDraft(); },
+  dslot:     renderDraft,
+  dpos:      renderDraft,
+  dsort:     renderDraft,
+  dwhy:      renderDraft
+};
+
+document.addEventListener('change', function (event) {
+  var handler = ON_CHANGE[event.target.id];
+  if (handler) handler(event.target.value);
+});
+
+(function init() {
+  // Every id in ON_CHANGE must exist, or a control is silently inert. This has
+  // already happened three times; fail loudly instead.
+  for (var id in ON_CHANGE) {
+    if (ON_CHANGE.hasOwnProperty(id) && !document.getElementById(id)) {
+      throw new Error('ON_CHANGE wired to missing element: #' + id);
+    }
+  }
+  var select = document.getElementById('week'), html = '';
+  for (var i = 0; i < DATA.weeks.length; i++) {
+    html += '<option value="' + DATA.weeks[i] + '">Week ' + DATA.weeks[i] + '</option>';
+  }
+  select.innerHTML = html;
+  select.value = state.week;
+  document.getElementById('format').value = state.format;
+  render();
+}());
+</script>
+</body>
+</html>
