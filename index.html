@@ -676,6 +676,31 @@
     </div>
 
     <div class="card">
+      <h2>Season rankings</h2>
+      <div class="row" style="margin-bottom:10px">
+        <div>
+          <label for="srankpos">Position</label>
+          <select id="srankpos">
+            <option>QB</option><option selected>RB</option><option>WR</option>
+            <option>TE</option><option>FLEX</option><option>K</option><option>DST</option>
+          </select>
+        </div>
+        <div>
+          <label for="sranklimit">Show</label>
+          <select id="sranklimit">
+            <option>25</option><option selected>50</option><option>100</option>
+          </select>
+        </div>
+        <div>
+          <label for="sshowwhy">Commentary</label>
+          <div><input type="checkbox" id="sshowwhy" checked> <span class="slot">why</span></div>
+        </div>
+      </div>
+      <div class="scroll" id="seasonRanks"></div>
+      <div class="note" id="seasonRankNote"></div>
+    </div>
+
+    <div class="card">
       <h2>Pass-catching backs</h2>
       <div class="scroll" id="catchingBacks"></div>
       <div class="note">
@@ -2065,6 +2090,217 @@ function renderLines() {
 /* Season receiving work for every back, summed from the weekly projections already in
    the payload. No new data needed — the numbers were always there, just never added up
    anywhere a person could see them. */
+/* ------------------------------------------------------------------ *
+ * Season rankings.
+ *
+ * The weekly table answers "who do I start on Sunday". This one answers "who is worth
+ * more over the whole year", which is a different question and gets a different number:
+ *
+ *   season points = live per-game rate x the games he should actually PLAY
+ *
+ * Not the sum of every week. Summing eighteen weeks prices a season nobody has — a
+ * market-sized player averages about 14.5 of 17 — and it is the same healthy-season
+ * fiction that makes a summed weekly projection useless as a season forecast. Expected
+ * games is the model's own projection, shrunk toward a positional baseline by a constant
+ * derived from how weakly games played repeats year to year (RB r=0.27).
+ *
+ * The rate is recomputed from the live scoring settings rather than read from the build,
+ * so changing PPR moves this table exactly like it moves the weekly one.
+ * ------------------------------------------------------------------ */
+
+function seasonRateFor(player) {
+  var total = 0, games = 0;
+  for (var wk in player.weeks) {
+    if (!Object.prototype.hasOwnProperty.call(player.weeks, wk)) continue;
+    var w = player.weeks[wk];
+    if (!w || w.is_bye) continue;
+    var pts = score(w.stats);
+    if (pts <= 0) continue;
+    total += pts;
+    games++;
+  }
+  return games ? { pg: total / games, weeks: games } : null;
+}
+
+function seasonRows(position) {
+  var rows = [];
+  for (var i = 0; i < PLAYERS.length; i++) {
+    var p = PLAYERS[i];
+    var match = position === 'FLEX' ? FLEX_OK[p.position] : p.position === position;
+    if (!match) continue;
+    var rate = seasonRateFor(p);
+    if (!rate) continue;
+    // Expected games travels with the player from the build. Without it we would be
+    // back to assuming a full season, so a player who has none is left out rather than
+    // silently given 17.
+    var games = (DRAFT && DRAFT.games) ? DRAFT.games[p.gsis_id] : null;
+    if (!games) continue;
+    rows.push({
+      p: p, pg: rate.pg, games: games, total: rate.pg * games,
+      vor: (DRAFT.vor && DRAFT.vor[p.gsis_id]) ? DRAFT.vor[p.gsis_id]['12'] : null,
+      adp: (DRAFT.adp || {})[p.gsis_id]
+    });
+  }
+  rows.sort(function (a, b) { return b.total - a.total; });
+  return rows;
+}
+
+function seasonCommentary(row, rank) {
+  var p = row.p, parts = [];
+  var past = HIST[p.gsis_id];
+  var thresh = (FACTS.thresholds || {})[p.position];
+
+  /* 1. WHAT HE DID, at the same per-game altitude this table is ranking on. A season
+        total alone hides whether he was good or merely available. */
+  if (past && past.games) {
+    parts.push('Last season he finished <b>' + p.position + past.rank
+      + '</b> — ' + past.pts.toFixed(0) + ' points in ' + past.games
+      + ' games, ' + past.ppg.toFixed(1) + ' a game.');
+  } else {
+    parts.push('No scoring season on record — rookie, hurt, or a role that did not '
+      + 'exist yet, so this projection leans on the positional baseline.');
+  }
+
+  /* 2. THE TWO NUMBERS THAT MAKE THE TOTAL, said separately. A back at 15 a game for
+        13 games and one at 12 a game for 16 are not the same asset even when the
+        season total matches, and only the split says which is which. */
+  var missed = 17 - row.games;
+  parts.push('We project <b>' + row.pg.toFixed(1) + ' a game</b> over '
+    + row.games.toFixed(1) + ' games — ' + row.total.toFixed(0) + ' for the year. '
+    + (missed >= 2.5
+       ? 'That is ' + missed.toFixed(1) + ' games written off before the season starts, '
+         + 'and it is not pessimism about him: games played repeats year to year at '
+         + 'only r=0.27 for a back, so almost everyone regresses toward the positional '
+         + 'mean of about 13.'
+       : 'He carries an unusually full slate for his position.'));
+
+  /* 3. CONSISTENCY, against the position's own bar rather than a fixed one. Twenty
+        points is routine for a quarterback and near-impossible for a tight end. */
+  if (past && thresh && past.games >= 6) {
+    parts.push('He cleared ' + thresh.floor + ' points in ' + past.over + ' of '
+      + past.games + ' games and busted below it in ' + past.under
+      + (past.crank ? ', which ranked him ' + ordinal(past.crank) + ' at the position '
+                      + 'for reliability' : '')
+      + '. The bar is set per position — ' + thresh.floor + ' for a ' + p.position
+      + ', not a flat number that would flatter every quarterback.');
+  }
+
+  /* 4. WHAT CHANGED AROUND HIM. Each of these is measured elsewhere and carries its
+        size, because "new team" and "his teammate left" are the two claims fantasy
+        writing makes most often and least carefully. */
+  var moved = (CTX.moved || {})[p.gsis_id];
+  if (moved && moved.from && moved.from !== p.team) {
+    parts.push('<b>New team</b> — ' + esc(moved.from) + ' to ' + esc(p.team)
+      + '. Measured across 330 player-seasons that costs about a point a game rather '
+      + 'than unlocking anything, and it is already priced in above.');
+  }
+
+  var gone = (DEPART.vacated || {})[p.team];
+  if (gone && gone.left && gone.left.length) {
+    var isRun = p.position === 'RB';
+    var names = [];
+    for (var g = 0; g < gone.left.length && g < 2; g++) {
+      var L = gone.left[g];
+      if ((isRun && L.att >= 40) || (!isRun && L.tgt >= 40)) names.push(esc(L.name));
+    }
+    if (names.length) {
+      parts.push('<b>Gone from ' + esc(p.team) + ':</b> ' + names.join(' and ') + ' — '
+        + Math.round((isRun ? gone.carries : gone.targets) * 100) + '% of last '
+        + 'season’s ' + (isRun ? 'carries' : 'targets') + ' vacated. '
+        + (isRun
+           ? 'Worth about a carry a game to the back who stays when half a backfield '
+             + 'leaves, so it is real and it is small — and it is NOT in the number '
+             + 'above.'
+           : 'For receivers this predicts nothing at all (r = −0.03, wrong sign), so '
+             + 'read it as news rather than as points.'));
+    }
+  }
+
+  /* 5. WHERE THE MARKET IS. The one number here not derived from our own model, so it
+        is the only genuine outside check on the projection. */
+  var market = (FACTS.lines || {})[p.gsis_id];
+  if (market) {
+    var stat = p.position === 'QB' ? 'pass_yd'
+             : p.position === 'RB' ? 'rush_yd' : 'rec_yd';
+    var m = market[stat];
+    if (m && m.line && m.ours) {
+      var diff = m.ours - m.line;
+      var unit = stat === 'pass_yd' ? 'passing' : stat === 'rush_yd' ? 'rushing'
+                                                                    : 'receiving';
+      parts.push('The sportsbook has him at ' + m.line.toFixed(0) + ' ' + unit
+        + ' yards; we land ' + Math.abs(diff).toFixed(0) + ' '
+        + (diff >= 0 ? 'above' : 'below')
+        + (Math.abs(diff) / m.line < 0.06
+           ? ' — close enough to call it agreement.'
+           : ', which is a real disagreement and worth a look.'));
+    }
+  }
+
+  /* 6. DRAFT COST. A ranking without a price is only half an opinion. */
+  if (row.adp && rank) {
+    var round12 = Math.ceil(row.adp / 12);
+    var gap = Math.round(row.adp) - rank;
+    parts.push('Going around pick ' + Math.round(row.adp) + ' (round ' + round12
+      + ' of a 12-team draft)'
+      + (Math.abs(gap) >= 12
+         ? ', which is ' + Math.abs(gap) + ' picks '
+           + (gap > 0 ? 'later than we rank him' : 'earlier than we rank him') + '.'
+         : ', about where we have him.'));
+  }
+
+  return parts;
+}
+
+function renderSeasonRankings() {
+  var host = document.getElementById('seasonRanks');
+  if (!host) return;
+  if (!DRAFT || !DRAFT.games) {
+    host.innerHTML = '<div class="empty">No season table in this build.</div>';
+    return;
+  }
+  var position = document.getElementById('srankpos').value;
+  var limit = +document.getElementById('sranklimit').value;
+  var showWhy = document.getElementById('sshowwhy').checked;
+  var rows = seasonRows(position).slice(0, limit);
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">Nothing projected at this position.</div>';
+    return;
+  }
+
+  var html = '<table><thead><tr><th>#</th><th class="l">Player</th>'
+    + '<th class="l">Team</th><th>Season pts</th><th>Per game</th><th>Games</th>'
+    + '<th>Value over replacement</th></tr></thead><tbody>';
+  for (var r = 0; r < rows.length; r++) {
+    var row = rows[r];
+    html += '<tr class="' + (showWhy ? 'nb' : '') + '">'
+      + rankCell(r + 1)
+      + '<td class="l who"' + teamStyle(row.p.team) + '>'
+        + avatar(row.p) + chip(row.p.position) + esc(row.p.name) + '</td>'
+      + '<td class="l">' + teamBadge(row.p.team) + '</td>'
+      + '<td><b>' + row.total.toFixed(0) + '</b></td>'
+      + '<td>' + row.pg.toFixed(1) + '</td>'
+      + '<td>' + row.games.toFixed(1) + '</td>'
+      + '<td>' + (row.vor === null || row.vor === undefined
+                  ? '<span class="slot">—</span>' : row.vor.toFixed(0)) + '</td></tr>';
+    if (showWhy) {
+      var why = seasonCommentary(row, r + 1);
+      html += '<tr class="why"><td></td><td colspan="6" class="l">'
+        + (why.length ? why.join(' ') : '&nbsp;') + '</td></tr>';
+    }
+  }
+  host.innerHTML = html + '</tbody></table>';
+
+  document.getElementById('seasonRankNote').innerHTML =
+    '<b>Season points are a rate times the games he should play, not a sum of every '
+    + 'week.</b> Adding up eighteen weeks describes a season with no missed games, '
+    + 'which nobody has — market-sized players average about 14.5 of 17. The per-game '
+    + 'rate recomputes from your scoring settings, so this table moves with the '
+    + 'Settings tab exactly like the weekly one. Value over replacement is against a '
+    + '12-team league: it is the gap to the best player at the same position you could '
+    + 'still have had for nothing, which is what makes a quarterback and a running '
+    + 'back comparable at all.';
+}
+
 function renderCatchingBacks() {
   var rows = [];
   for (var i = 0; i < PLAYERS.length; i++) {
@@ -2710,6 +2946,7 @@ function render() {
   renderStartSit();
   renderRankings();
   renderLines();
+  renderSeasonRankings();
   renderCatchingBacks();
   renderWaivers();
   renderRoster();
@@ -2812,6 +3049,9 @@ var ON_CHANGE = {
   whorizon:  renderWaivers,
   seasonpos: renderLines,
   seasonstat: renderLines,
+  srankpos:  renderSeasonRankings,
+  sranklimit: renderSeasonRankings,
+  sshowwhy:  renderSeasonRankings,
   ranklimit: renderRankings,
   showwhy:   renderRankings,
   platform:  renderLeague,
