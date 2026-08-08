@@ -1855,6 +1855,7 @@ var LINE_STATS = {
 var OUTLOOK = (DATA.facts && DATA.facts.outlook) || {};
 var HEALTHY = (DATA.facts && DATA.facts.healthy) || {};
 var TRENCH = (DATA.facts && DATA.facts.trenches) || {};
+var DEPART = (DATA.facts && DATA.facts.departures) || {};
 
 function lineCommentary(player, stat, unit, e) {
   var bits = [];
@@ -1909,6 +1910,39 @@ function lineCommentary(player, stat, unit, e) {
       + (team > 1 ? 'up' : 'down') + ' by ' + Math.round(Math.abs(team - 1) * 100)
       + '% more than the average team, so there is '
       + (team > 1 ? 'more' : 'less') + ' to go round.');
+  }
+
+  /* WHO LEFT. The projection is built from the workload this player earned while
+     sharing a backfield, and nothing in it knows a teammate has gone. Named here with
+     the measured size attached, because the effect is real, monotone and small, and
+     the honest thing is to show the move and the number together rather than let the
+     move imply more than it delivers. */
+  var gone = (DEPART.vacated || {})[player.team];
+  if (gone && gone.left && gone.left.length) {
+    var who = [];
+    for (var gi = 0; gi < gone.left.length && gi < 3; gi++) {
+      var L = gone.left[gi];
+      var took = (stat.indexOf('rush') === 0)
+        ? (L.att >= 20 ? L.att + ' carries' : null)
+        : (L.tgt >= 15 ? L.tgt + ' targets' : null);
+      if (took) who.push(esc(L.name) + ' (' + took
+        + (L.to ? ', to ' + esc(L.to) : ', not on a roster') + ')');
+    }
+    if (who.length) {
+      var isRush = stat.indexOf('rush') === 0;
+      var pct = Math.round((isRush ? gone.carries : gone.targets) * 100);
+      bits.push('<b>Gone from ' + esc(player.team) + ':</b> ' + who.join(', ')
+        + '. That is ' + pct + '% of last season’s '
+        + (isRush ? 'carries' : 'targets') + ' vacated'
+        + (isRush
+          ? '. Measured 2020–2025, a back on a team that lost half its carries '
+            + 'gains about a carry a game on one whose backfield came back intact '
+            + '(+1.08 per 100% vacated) — real and monotone, but worth only a few '
+            + 'yards a game, so it is shown rather than added to the projection.'
+          : '. Measured 2020–2025 this predicts nothing for receivers who stay '
+            + '(r = −0.03, and the wrong sign), so it is not applied — a '
+            + 'departing receiver does not hand his looks to the man beside him.'));
+    }
   }
 
   /* The offensive line, with its measured size attached. It is small — 2.1 yards a
@@ -1986,7 +2020,7 @@ function renderLines() {
   }
   rows.sort(function (a, b) { return b.e.line - a.e.line; });
 
-  var html = '<table><thead><tr><th class="l">Player</th><th>Line</th>'
+  var html = '<table><thead><tr><th class="l">Player</th><th>Sportsbook line</th>'
     + '<th>We project</th><th>Per game</th><th class="l">Lean</th>'
     + '</tr></thead><tbody>';
   for (var r = 0; r < rows.length; r++) {
