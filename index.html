@@ -598,8 +598,15 @@
 
   <section class="view" id="view-rankings" hidden>
     <div class="card">
-      <h2>Weekly rankings</h2>
+      <h2 id="rankheading">Rankings</h2>
       <div class="row" style="margin-bottom:10px">
+        <div>
+          <label for="rankhorizon">Horizon</label>
+          <select id="rankhorizon">
+            <option value="week" selected>This week</option>
+            <option value="season">Full season</option>
+          </select>
+        </div>
         <div>
           <label for="rankpos">Position</label>
           <select id="rankpos">
@@ -623,6 +630,7 @@
       <div class="scroll" id="rankings"></div>
       <div class="note" id="heatKey"></div>
       <div class="note" id="matchupnote"></div>
+      <div class="note" id="seasonRankNote" hidden></div>
     </div>
 
   </section>
@@ -673,31 +681,6 @@
       </div>
       <div class="scroll" id="linesTable"></div>
       <div class="note" id="linesNote"></div>
-    </div>
-
-    <div class="card">
-      <h2>Season rankings</h2>
-      <div class="row" style="margin-bottom:10px">
-        <div>
-          <label for="srankpos">Position</label>
-          <select id="srankpos">
-            <option>QB</option><option selected>RB</option><option>WR</option>
-            <option>TE</option><option>FLEX</option><option>K</option><option>DST</option>
-          </select>
-        </div>
-        <div>
-          <label for="sranklimit">Show</label>
-          <select id="sranklimit">
-            <option>25</option><option selected>50</option><option>100</option>
-          </select>
-        </div>
-        <div>
-          <label for="sshowwhy">Commentary</label>
-          <div><input type="checkbox" id="sshowwhy" checked> <span class="slot">why</span></div>
-        </div>
-      </div>
-      <div class="scroll" id="seasonRanks"></div>
-      <div class="note" id="seasonRankNote"></div>
     </div>
 
     <div class="card">
@@ -1794,7 +1777,25 @@ function renderStartSit() {
   benchBox.innerHTML = bench + '</tbody></table></div>';
 }
 
+/* The Rankings tab serves both horizons. Weekly and season answer the same question
+   over different windows, so they share one table, one position filter and one
+   commentary toggle — and the notes underneath swap with the table, because a note
+   explaining the weekly odds column is actively misleading next to season totals. */
 function renderRankings() {
+  var season = document.getElementById('rankhorizon').value === 'season';
+  document.getElementById('rankheading').textContent =
+    season ? 'Season rankings' : 'Weekly rankings';
+  document.getElementById('heatKey').hidden = season;
+  document.getElementById('matchupnote').hidden = season;
+  document.getElementById('seasonRankNote').hidden = !season;
+  if (season) {
+    renderSeasonRankings();
+    return;
+  }
+  renderWeeklyRankings();
+}
+
+function renderWeeklyRankings() {
   var position = document.getElementById('rankpos').value;
   var limit = +document.getElementById('ranklimit').value;
   var rows = [];
@@ -2251,16 +2252,19 @@ function seasonCommentary(row, rank) {
   return parts;
 }
 
+/* Shares the Rankings tab's table, position filter, count and commentary toggle with
+   the weekly view — they are the same question over a different horizon, so they are
+   one control set with a switch rather than two cards that drift apart. */
 function renderSeasonRankings() {
-  var host = document.getElementById('seasonRanks');
+  var host = document.getElementById('rankings');
   if (!host) return;
   if (!DRAFT || !DRAFT.games) {
     host.innerHTML = '<div class="empty">No season table in this build.</div>';
     return;
   }
-  var position = document.getElementById('srankpos').value;
-  var limit = +document.getElementById('sranklimit').value;
-  var showWhy = document.getElementById('sshowwhy').checked;
+  var position = document.getElementById('rankpos').value;
+  var limit = +document.getElementById('ranklimit').value;
+  var showWhy = document.getElementById('showwhy').checked;
   var rows = seasonRows(position).slice(0, limit);
   if (!rows.length) {
     host.innerHTML = '<div class="empty">Nothing projected at this position.</div>';
@@ -2946,7 +2950,6 @@ function render() {
   renderStartSit();
   renderRankings();
   renderLines();
-  renderSeasonRankings();
   renderCatchingBacks();
   renderWaivers();
   renderRoster();
@@ -3049,9 +3052,7 @@ var ON_CHANGE = {
   whorizon:  renderWaivers,
   seasonpos: renderLines,
   seasonstat: renderLines,
-  srankpos:  renderSeasonRankings,
-  sranklimit: renderSeasonRankings,
-  sshowwhy:  renderSeasonRankings,
+  rankhorizon: renderRankings,
   ranklimit: renderRankings,
   showwhy:   renderRankings,
   platform:  renderLeague,
