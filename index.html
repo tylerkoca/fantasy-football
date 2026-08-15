@@ -719,6 +719,22 @@
       <div class="note" id="vorNote"></div>
     </div>
     <div class="card">
+      <h2>What an early pick returns, by position
+        <span class="tag">measured, 2020–2025</span></h2>
+      <div class="row" style="margin-bottom:10px">
+        <div>
+          <label for="roitier">Where he finished last season</label>
+          <select id="roitier">
+            <option value="1-5">Top 5 at the position</option>
+            <option value="1-12" selected>Top 12</option>
+            <option value="13-24">13th to 24th</option>
+          </select>
+        </div>
+      </div>
+      <div class="scroll" id="roiTable"></div>
+      <div class="note" id="roiNote"></div>
+    </div>
+    <div class="card">
       <h2>Board</h2>
       <div class="row" style="margin-bottom:10px">
         <div>
@@ -2316,6 +2332,92 @@ function renderSeasonRankings() {
     + 'back comparable at all.';
 }
 
+/* ------------------------------------------------------------------ *
+ * What an early pick returns, by position.
+ *
+ * The oldest argument in fantasy football, tested. Two things make it readable:
+ * value is shown OVER REPLACEMENT rather than as raw points, because points across
+ * positions are not comparable and comparing them is how the folklore started; and
+ * the per-game column is shown beside the total, so "he got hurt" and "he was worse"
+ * are separated instead of being blamed on each other.
+ * ------------------------------------------------------------------ */
+
+var ROI = (DATA.facts && DATA.facts.positional_roi) || null;
+
+function renderPositionalRoi() {
+  var host = document.getElementById('roiTable');
+  if (!host) return;
+  if (!ROI || !ROI.tiers) {
+    host.innerHTML = '<div class="empty">Not in this build.</div>';
+    return;
+  }
+  var tier = document.getElementById('roitier').value;
+  var order = ['RB', 'WR', 'QB', 'TE'];
+  var rows = [];
+  for (var i = 0; i < order.length; i++) {
+    var e = (ROI.tiers[order[i]] || {})[tier];
+    if (e) rows.push({ pos: order[i], e: e });
+  }
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">No sample at this tier.</div>';
+    return;
+  }
+  rows.sort(function (a, b) { return b.e.over_replacement - a.e.over_replacement; });
+
+  var html = '<table><thead><tr><th class="l">Position</th>'
+    + '<th>Points scored</th><th>Over replacement</th>'
+    + '<th>Per game over replacement</th><th>Games</th><th>Finished there again</th>'
+    + '</tr></thead><tbody>';
+  for (var r = 0; r < rows.length; r++) {
+    var p = rows[r].pos, e = rows[r].e;
+    var worth = e.over_replacement;
+    html += '<tr><td class="l">' + chip(p) + '</td>'
+      + '<td>' + e.points.toFixed(0) + '</td>'
+      + '<td><b>' + (worth >= 0 ? '+' : '') + worth.toFixed(0) + '</b>'
+      + (worth <= 5 ? ' <span class="tag bad">nothing</span>' : '') + '</td>'
+      + '<td>' + (e.over_replacement_per_game >= 0 ? '+' : '')
+        + e.over_replacement_per_game.toFixed(1) + '</td>'
+      + '<td>' + e.games.toFixed(1) + '</td>'
+      + '<td>' + Math.round(e.repeat_rate * 100) + '%</td></tr>';
+  }
+  host.innerHTML = html + '</tbody></table>';
+
+  var rb = (ROI.tiers.RB || {})['1-12'], wr = (ROI.tiers.WR || {})['1-12'];
+  var qb = (ROI.tiers.QB || {})['1-12'];
+  var note = '<b>Read the second column, not the first.</b> Points do not compare '
+    + 'across positions: every team starts a quarterback, so what a pick is worth is '
+    + 'the gap to the best player you could still have had for free at that position.';
+  if (rb && wr) {
+    note += '<br><br><b>The round-one argument.</b> Receivers score <i>more</i> raw '
+      + 'points than backs (' + wr.points.toFixed(0) + ' to ' + rb.points.toFixed(0)
+      + '), so "backs score more" is simply wrong. The running back edge is scarcity — '
+      + '<b>+' + rb.over_replacement.toFixed(0) + '</b> over replacement against <b>+'
+      + wr.over_replacement.toFixed(0) + '</b> — because the 30th back is far worse '
+      + 'relative to the 12th than the 30th receiver is.'
+      + '<br><br><b>Injuries do not explain it away.</b> Games played are level ('
+      + rb.games.toFixed(1) + ' against ' + wr.games.toFixed(1) + ', two tenths of a '
+      + 'game), and per game — which asks only how good he was on the days he played — '
+      + 'backs still lead by ' + (rb.over_replacement_per_game
+                                  - wr.over_replacement_per_game).toFixed(1)
+      + ' points. Backs also repeat better: ' + Math.round(rb.repeat_rate * 100)
+      + '% finished top-12 again against ' + Math.round(wr.repeat_rate * 100) + '%.';
+  }
+  if (qb) {
+    note += '<br><br><b>And this is why you wait on a quarterback.</b> Top-12 QBs '
+      + 'scored the most raw points of any position (' + qb.points.toFixed(0)
+      + ') and were worth <b>' + qb.over_replacement.toFixed(0) + '</b> over '
+      + 'replacement — nothing at all, because the twelfth-best quarterback is nearly '
+      + 'as good as the best one and somebody is always available.';
+  }
+  note += '<br><br><b>What this cannot tell you.</b> Historical ADP is not published, '
+    + 'so where a player <i>finished</i> stands in for what he <i>cost</i>. That says '
+    + 'nothing about rookies, who have no prior season and are often round-one picks, '
+    + 'and it treats "finished RB4" as though it were "cost an RB4 pick" when a hyped '
+    + 'breakout can go two rounds above his finish. It is an argument about the '
+    + 'position, not a projection for any player.';
+  document.getElementById('roiNote').innerHTML = note;
+}
+
 function renderCatchingBacks() {
   var rows = [];
   for (var i = 0; i < PLAYERS.length; i++) {
@@ -2966,6 +3068,7 @@ function render() {
   renderRoster();
   renderLeague();
   renderDraft();
+  renderPositionalRoi();
   renderSettings();
   save();
 }
@@ -3071,7 +3174,8 @@ var ON_CHANGE = {
   dslot:     renderDraft,
   dpos:      renderDraft,
   dsort:     renderDraft,
-  dwhy:      renderDraft
+  dwhy:      renderDraft,
+  roitier:   renderPositionalRoi
 };
 
 document.addEventListener('change', function (event) {
