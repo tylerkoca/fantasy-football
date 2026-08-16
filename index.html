@@ -179,6 +179,7 @@
   .tab[data-view="waivers"]  { --tabhue: #4ecf9a; }
   .tab[data-view="season"]   { --tabhue: #f0b84e; }
   .tab[data-view="draft"]    { --tabhue: #f08155; }
+  .tab[data-view="scores"]   { --tabhue: #c2477e; }
   .tab[data-view="roster"]   { --tabhue: #4fc9d8; }
   .tab[data-view="settings"] { --tabhue: #bcc4ce; }
   main { padding: 20px; max-width: 1400px; margin: 0 auto; }
@@ -195,7 +196,40 @@
   #view-waivers  { --section: #199e70; }
   #view-season   { --section: #d98a26; }
   #view-draft    { --section: #d95926; }
+  #view-scores   { --section: #b83d70; }
   #view-roster   { --section: #2aa8b8; }
+
+  /* Scoreboard. One card per game, laid out on a grid so a slate of sixteen reads as
+     a slate rather than a list you have to scroll. */
+  .games { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+  .game {
+    border: 1px solid var(--line-soft); border-radius: var(--radius);
+    background: var(--panel-tint); padding: 11px 13px;
+  }
+  .game .side {
+    display: flex; align-items: center; gap: 8px; padding: 3px 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .game .side .pts { margin-left: auto; font-weight: 800; font-size: 17px; }
+  /* The losing side recedes rather than the winner shouting; both stay legible. */
+  .game .side.lost { color: var(--dim); }
+  .game .side.lost .pts { font-weight: 600; }
+  .game .when {
+    font-size: 11px; color: var(--dim); text-transform: uppercase;
+    letter-spacing: .6px; font-weight: 700; margin-bottom: 5px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  /* A live game gets a pulsing dot AND the word "live" — the dot alone would be the
+     only carrier of that state, which is exactly what the palette rules forbid. */
+  .game .when.live { color: var(--critical); }
+  .game .when.live::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--critical); animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
+  @media (prefers-reduced-motion: reduce) {
+    .game .when.live::before { animation: none; }
+  }
   #view-settings { --section: #8d93a8; }
   .card h2 {
     font-size: 12px; margin: 0 0 13px; text-transform: uppercase;
@@ -560,6 +594,7 @@
     <button class="tab" role="tab" data-view="waivers" aria-selected="false">Waivers</button>
     <button class="tab" role="tab" data-view="season" aria-selected="false">Season Insights</button>
     <button class="tab" role="tab" data-view="draft" aria-selected="false">Draft</button>
+    <button class="tab" role="tab" data-view="scores" aria-selected="false">Scores</button>
     <button class="tab" role="tab" data-view="roster" aria-selected="false">Roster</button>
     <button class="tab" role="tab" data-view="settings" aria-selected="false">Settings</button>
   </div>
@@ -764,6 +799,23 @@
     </div>
   </section>
 
+  <section class="view" id="view-scores" hidden>
+    <div class="card">
+      <h2>Around the league
+        <span class="tag">live</span></h2>
+      <div class="row" style="margin-bottom:10px; align-items:flex-end">
+        <div>
+          <label for="scoreweek">Week</label>
+          <select id="scoreweek"></select>
+        </div>
+        <div><button class="primary" id="refreshscores">Refresh</button></div>
+        <div class="note" id="scorestatus" style="margin:0"></div>
+      </div>
+      <div id="scoreboard"></div>
+      <div class="note" id="scoresnote"></div>
+    </div>
+  </section>
+
   <section class="view" id="view-roster" hidden>
     <div class="card">
       <h2>Import your league</h2>
@@ -802,6 +854,7 @@
       <div class="card" style="flex:1 1 340px">
         <h2>Your roster (<span id="rosterCount">0</span>)</h2>
         <div class="scroll" id="rosterList" style="max-height:460px"></div>
+        <div class="note" id="liveNote"></div>
         <div class="note">
           Saved in this browser only. League import will populate this automatically later.
         </div>
@@ -2418,6 +2471,177 @@ function renderPositionalRoi() {
   document.getElementById('roiNote').innerHTML = note;
 }
 
+/* ------------------------------------------------------------------ *
+ * LIVE DATA — the only part of this page that is not from the build.
+ *
+ * Everything else here is a static snapshot rebuilt daily. Scores and actual stats have
+ * to be current to the minute, so they are fetched in the browser at the moment you look
+ * at them. Both sources send Access-Control-Allow-Origin: *, which is what makes this
+ * possible from a static host with no server of our own.
+ *
+ * Two things this deliberately does NOT do. It does not write live results back into any
+ * projection, ranking or lineup — those stay reproducible from the build. And it never
+ * shows a zero it cannot justify: a source that is unreachable, or a position whose
+ * stats are not in the feed, says so instead of quietly reading as "scored nothing".
+ * ------------------------------------------------------------------ */
+
+var ESPN_SCOREBOARD = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard';
+var SLEEPER_STATS = 'https://api.sleeper.app/v1/stats/nfl/regular/';
+
+/* Sleeper's stat vocabulary matches our contract exactly for all 21 offensive stats,
+   which is why their line can go straight into our own score(). That is checked, not
+   assumed — parity.py --sleeper recovers their point values at r2 0.999978.
+
+   Kickers and defences are the exception: their stats are in the feed under different
+   names (fgm_40_49 rather than fg_made_40_49), so scoring them with our config would
+   silently return zero for a kicker who kicked four field goals. Those positions are
+   badged instead. A wrong number is worse than a missing one. */
+var LIVE_SCORABLE = { QB: 1, RB: 1, WR: 1, TE: 1 };
+
+var live = { stats: null, statsWeek: null, statsPending: false };
+/* Which tab is open. UI state, so deliberately not persisted with the roster. */
+var currentView = 'startsit';
+
+function fetchJson(url) {
+  return fetch(url).then(function (r) {
+    if (!r.ok) return Promise.reject(new Error('HTTP ' + r.status));
+    return r.json();
+  });
+}
+
+/* ---- the scoreboard ---------------------------------------------- */
+
+function gameState(ev) {
+  var t = ((ev.status || {}).type) || {};
+  return { state: t.state || 'pre', detail: t.shortDetail || '', done: !!t.completed };
+}
+
+function renderScoreboard(payload) {
+  var host = document.getElementById('scoreboard');
+  var events = (payload && payload.events) || [];
+  if (!events.length) {
+    host.innerHTML = '<div class="empty">No games scheduled for this week yet. '
+      + 'The NFL regular season has not started.</div>';
+    return 0;
+  }
+  var liveCount = 0;
+  var html = '<div class="games">';
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i], comp = (ev.competitions || [])[0] || {};
+    var st = gameState(ev);
+    if (st.state === 'in') liveCount++;
+    var teams = comp.competitors || [];
+    var home = null, away = null;
+    for (var t = 0; t < teams.length; t++) {
+      if (teams[t].homeAway === 'home') home = teams[t]; else away = teams[t];
+    }
+    if (!home || !away) continue;
+    var hs = +(home.score || 0), as = +(away.score || 0);
+    var bc = ((comp.broadcasts || [])[0] || {}).names || [];
+
+    var when = st.state === 'in' ? '<div class="when live">Live · ' + esc(st.detail) + '</div>'
+      : st.state === 'post' ? '<div class="when">' + esc(st.detail) + '</div>'
+      : '<div class="when">' + esc(st.detail || 'Scheduled')
+        + (bc.length ? ' · ' + esc(bc.join('/')) : '') + '</div>';
+
+    html += '<div class="game">' + when
+      + side(away, as, st, hs) + side(home, hs, st, as) + '</div>';
+  }
+  host.innerHTML = html + '</div>';
+  return liveCount;
+}
+
+function side(team, points, st, other) {
+  var abbr = ((team.team || {}).abbreviation) || '';
+  var rec = ((team.records || [])[0] || {}).summary || '';
+  // Only dim a loser once the game is actually over; dimming a team that is behind at
+  // half-time would be an opinion, not a result.
+  var lost = st.done && points < other;
+  return '<div class="side' + (lost ? ' lost' : '') + '"' + teamStyle(abbr) + '>'
+    + teamBadge(abbr)
+    + '<span class="slot">' + esc(rec) + '</span>'
+    + '<span class="pts">' + (st.state === 'pre' ? '—' : points) + '</span></div>';
+}
+
+function renderScores(force) {
+  var host = document.getElementById('scoreboard');
+  var status = document.getElementById('scorestatus');
+  var picker = document.getElementById('scoreweek');
+  if (!host || !picker) return;
+
+  if (!picker.options.length) {
+    var opts = '';
+    for (var w = 0; w < DATA.weeks.length; w++) {
+      opts += '<option value="' + DATA.weeks[w] + '"'
+        + (String(DATA.weeks[w]) === String(state.week) ? ' selected' : '')
+        + '>Week ' + DATA.weeks[w] + '</option>';
+    }
+    picker.innerHTML = opts;
+  }
+  if (!force && host.getAttribute('data-week') === picker.value) return;
+  host.setAttribute('data-week', picker.value);
+
+  status.textContent = 'Loading…';
+  var url = ESPN_SCOREBOARD + '?seasontype=2&week=' + encodeURIComponent(picker.value)
+    + '&dates=' + encodeURIComponent(DATA.season);
+  fetchJson(url).then(function (payload) {
+    var liveCount = renderScoreboard(payload);
+    status.textContent = liveCount
+      ? liveCount + (liveCount === 1 ? ' game' : ' games') + ' in progress'
+      : 'Updated ' + new Date().toLocaleTimeString();
+    scheduleScoreRefresh(liveCount > 0);
+  }).catch(function (err) {
+    host.innerHTML = '<div class="empty">Could not reach the scoreboard ('
+      + esc(String(err.message || err)) + '). Scores are fetched live, so this needs a '
+      + 'working connection — everything else on the page works offline.</div>';
+    status.textContent = '';
+  });
+
+  document.getElementById('scoresnote').innerHTML =
+    'Scores come straight from ESPN when you open this tab, not from the nightly build, '
+    + 'so they are current to the minute. While a game is in progress the page refreshes '
+    + 'itself every 45 seconds; otherwise it leaves the network alone. Nothing here '
+    + 'feeds a projection or a ranking.';
+}
+
+var scoreTimer = null;
+function scheduleScoreRefresh(anyLive) {
+  if (scoreTimer) { clearTimeout(scoreTimer); scoreTimer = null; }
+  // Only poll while something is actually happening. A timer left running against a
+  // finished slate is a request every 45 seconds forever, on someone else's server.
+  if (!anyLive) return;
+  scoreTimer = setTimeout(function () {
+    if (currentView === 'scores') renderScores(true);
+  }, 45000);
+}
+
+/* ---- live actuals for your own players --------------------------- */
+
+function loadLiveStats(week, done) {
+  if (live.statsWeek === week && live.stats) { done(); return; }
+  if (live.statsPending) return;
+  live.statsPending = true;
+  fetchJson(SLEEPER_STATS + DATA.season + '/' + week).then(function (payload) {
+    live.stats = payload || {};
+    live.statsWeek = week;
+  }).catch(function () {
+    live.stats = null;
+  }).then(function () {
+    live.statsPending = false;
+    done();
+  });
+}
+
+/* Actual points so far this week, in YOUR scoring settings. Returns null when we
+   cannot say — no line yet, or a position whose stats this feed does not carry. */
+function liveFor(player) {
+  if (!live.stats) return null;
+  var raw = live.stats[player.sleeper_id];
+  if (!raw) return null;
+  if (!LIVE_SCORABLE[player.position]) return { unsupported: true };
+  return { points: score(raw), stats: raw };
+}
+
 function renderCatchingBacks() {
   var rows = [];
   for (var i = 0; i < PLAYERS.length; i++) {
@@ -2657,17 +2881,58 @@ function renderRoster() {
 
   var list = '';
   var entries = rosterEntries();
+  var liveTotal = 0, liveSeen = 0;
   for (var e = 0; e < entries.length; e++) {
     var it = entries[e];
+    /* Actual points so far, beside the projection. Both numbers are scored with YOUR
+       settings, so the comparison is like for like — and the actual is only shown when
+       there is a real stat line behind it. */
+    var actual = liveFor(it.player);
+    var actualCell = '';
+    if (actual && actual.unsupported) {
+      actualCell = '<span class="tag">live n/a</span> ';
+    } else if (actual) {
+      liveTotal += actual.points; liveSeen++;
+      var delta = actual.points - it.points;
+      actualCell = '<b>' + actual.points.toFixed(1) + '</b> <span class="tag '
+        + (delta >= 0 ? 'good' : 'bad') + '">' + (delta >= 0 ? '+' : '')
+        + delta.toFixed(1) + '</span> ';
+    }
     list += '<div class="row" style="justify-content:space-between;padding:5px 0;'
       + 'border-bottom:1px solid var(--line)"><span>' + chip(it.position)
       + esc(it.player.name) + '</span>'
-      + '<span>' + it.points.toFixed(1) + ' <button data-remove="'
+      + '<span>' + actualCell
+      + '<span class="slot">proj ' + it.points.toFixed(1) + '</span> <button data-remove="'
       + esc(it.player.gsis_id) + '">remove</button></span></div>';
   }
   document.getElementById('rosterList').innerHTML =
     list || '<div class="empty">Empty.</div>';
   document.getElementById('rosterCount').textContent = state.roster.length;
+
+  var note = document.getElementById('liveNote');
+  if (note) {
+    if (!state.roster.length) {
+      note.innerHTML = '';
+    } else if (liveSeen) {
+      note.innerHTML = '<b>' + liveTotal.toFixed(1) + ' actual points</b> from '
+        + liveSeen + ' of your ' + state.roster.length + ' players in week '
+        + state.week + ', scored with your own settings — the same scoring the '
+        + 'projection beside it uses. Kickers and defences show <i>live n/a</i>: their '
+        + 'stats are not in this feed under the names our scoring uses, and a wrong '
+        + 'zero would be worse than an honest gap.';
+    } else {
+      note.innerHTML = 'No actual stats for week ' + state.week + ' yet. This fills in '
+        + 'once games are played — it is fetched live rather than coming from the '
+        + 'nightly build.';
+    }
+  }
+
+  // Fetch once per week, then repaint. Guarded so it cannot loop.
+  if (state.roster.length && live.statsWeek !== state.week && !live.statsPending) {
+    loadLiveStats(state.week, function () {
+      if (live.statsWeek === state.week) renderRoster();
+    });
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -3089,6 +3354,11 @@ document.addEventListener('click', function (event) {
       tabs[i].setAttribute('aria-selected', on ? 'true' : 'false');
       document.getElementById('view-' + tabs[i].dataset.view).hidden = !on;
     }
+    currentView = target.dataset.view;
+    // Scores are fetched when you open the tab, not on page load: most visits never
+    // look at them, and this is someone else's server.
+    if (currentView === 'scores') renderScores(false);
+    else scheduleScoreRefresh(false);
     return;
   }
   if (target.dataset.add) {
@@ -3114,6 +3384,8 @@ document.addEventListener('click', function (event) {
         'good');
       render();
     });
+  } else if (target.id === 'refreshscores') {
+    renderScores(true);
   } else if (target.id === 'clearleague') {
     LEAGUE = null; state.league = null; state.leagueTeam = undefined;
     setStatus('League cleared.', '');
@@ -3175,7 +3447,8 @@ var ON_CHANGE = {
   dpos:      renderDraft,
   dsort:     renderDraft,
   dwhy:      renderDraft,
-  roitier:   renderPositionalRoi
+  roitier:   renderPositionalRoi,
+  scoreweek: function () { renderScores(true); }
 };
 
 document.addEventListener('change', function (event) {
