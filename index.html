@@ -393,6 +393,10 @@
   .fc .spread.wide  { color: var(--serious); }
 
   .slot { color: var(--muted); font-size: 11px; letter-spacing: .5px; }
+  /* Both sides of a market, stacked so the column stays narrow. Tabular figures keep
+     the two prices aligned under each other. */
+  .odds { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
+          line-height: 1.35; white-space: nowrap; }
   /* Workload: opportunity, in the same tabular figures as the projections beside it. */
   .usage { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
            white-space: nowrap; }
@@ -601,7 +605,8 @@
 </header>
 
 <main>
-  <div class="card">
+  <!-- Start / Sit only — see syncControls. -->
+  <div class="card" id="globalControls">
     <div class="row" style="align-items:flex-end">
       <div>
         <label for="week">Week</label>
@@ -1952,6 +1957,81 @@ var HEALTHY = (DATA.facts && DATA.facts.healthy) || {};
 var TRENCH = (DATA.facts && DATA.facts.trenches) || {};
 var DEPART = (DATA.facts && DATA.facts.departures) || {};
 
+/* The verdict compares two probabilities, so the band is in probability too. Read from
+   the payload rather than written here, so it stays the number lines.py actually used
+   to compute the sensitivity this panel prints. */
+function leanBand() {
+  var band = DATA.facts && DATA.facts.lines_lean_band;
+  return (typeof band === 'number' && band > 0) ? band : 0.08;
+}
+
+/* American odds, with the sign the book prints. */
+function oddsText(n) {
+  if (n === null || n === undefined) return '—';
+  return (n > 0 ? '+' : '') + n;
+}
+
+function oddsPair(e) {
+  if (e.over === null && e.under === null) return '<span class="slot">—</span>';
+  return 'o ' + oddsText(e.over) + '<br>u ' + oddsText(e.under);
+}
+
+function pctText(p) {
+  if (p === null || p === undefined) return '<span class="slot">—</span>';
+  return Math.round(p * 100) + '%';
+}
+
+/* Yardage markets are hundreds, touchdown markets are single digits — rounding both
+   the same way prints either "115.0 yards" or a meaningless "1 touchdowns". */
+function fmtGap(n) {
+  return n >= 10 ? String(Math.round(n)) : n.toFixed(1);
+}
+
+/* WHY THE VERDICT CAME OUT THAT WAY.
+   The table shows points and the verdict is computed from probabilities, which makes
+   the column look arbitrary — a big gap can read "line looks right" while a small one
+   reads UNDER. Three separate things cause that, and this names whichever one is doing
+   the work on this row rather than leaving the reader to guess. */
+function leanCommentary(e, unit) {
+  if (e.p === null || e.p === undefined || e.book === null || e.book === undefined) {
+    return null;
+  }
+  var band = leanBand();
+  var edge = e.p - e.book;
+  var fired = Math.abs(edge) >= band;
+  var bookPct = Math.round(e.book * 100), ourPct = Math.round(e.p * 100);
+  var out = 'The book prices the over at <b>' + bookPct + '%</b> once its margin is '
+    + 'stripped out; our error distribution puts it at <b>' + ourPct + '%</b>. That '
+    + Math.round(Math.abs(edge) * 100) + '-point difference is '
+    + (fired ? 'past' : 'inside') + ' the ' + Math.round(band * 100)
+    + '-point band, so it reads as ' + (fired ? 'a lean.' : 'agreement.');
+
+  /* The price, not the number. A market priced away from even money means we can sit
+     on top of the line and still disagree with the bet — the single most confusing
+     row in this table, and previously nothing on screen explained it. */
+  if (e.ours !== null && e.ours !== undefined && e.line > 0) {
+    var pointGap = Math.abs(e.ours - e.line) / e.line;
+    if (fired && pointGap < 0.03) {
+      out += ' Note our total ' + (Math.round(pointGap * 100) < 1
+          ? 'sits essentially on the line'
+          : 'is within ' + Math.round(pointGap * 100) + '% of the line')
+        + ' — the disagreement here is with the <b>price</b>, not the number. '
+        + 'The book is asking ' + bookPct + '% for a market we make closer to a '
+        + 'coin flip.';
+    } else if (!fired && e.w && pointGap >= 0.05) {
+      /* The distribution is wide. Say how wide, in the units on screen — the point
+         figure comes from lines.py, measured against the raw projection the ratio
+         distribution is defined on rather than re-derived from the line here. */
+      out += ' A gap that size looks large, but season ' + unit + ' swing enough that '
+        + 'the two numbers have to be about <b>' + Math.round(e.w * 100) + '% apart</b>'
+        + (e.wp ? ' (roughly ' + fmtGap(e.wp) + ' ' + unit + ')' : '')
+        + ' before the probability moves the ' + Math.round(band * 100) + ' points that '
+        + 'would make it a lean.';
+    }
+  }
+  return out;
+}
+
 function lineCommentary(player, stat, unit, e) {
   var bits = [];
 
@@ -1976,6 +2056,10 @@ function lineCommentary(player, stat, unit, e) {
         + (shift > 0 ? 'more' : 'less') + ' per game than last year.');
     }
   }
+
+  /* How the two numbers on screen turn into the verdict in the last column. */
+  var why = leanCommentary(e, unit);
+  if (why) bits.push(why);
 
   /* WHO WAS ACTUALLY ON THE FIELD, before any claim about the offence.
      Reading last season's total as a fact about the offence is how this got Baltimore
@@ -2116,28 +2200,37 @@ function renderLines() {
   rows.sort(function (a, b) { return b.e.line - a.e.line; });
 
   var html = '<table><thead><tr><th class="l">Player</th><th>Sportsbook line</th>'
-    + '<th>We project</th><th>Per game</th><th class="l">Lean</th>'
+    + '<th>Price</th><th>We project</th><th>Per game</th>'
+    + '<th>Book %</th><th>Our %</th><th class="l">Lean</th>'
     + '</tr></thead><tbody>';
   for (var r = 0; r < rows.length; r++) {
     var row = rows[r], e = row.e;
     var edge = (e.p !== null && e.book !== null) ? e.p - e.book : null;
     var lean = '<span class="slot">—</span>';
-    if (e.p !== null) {
+    if (edge !== null) {
       /* Only call it a lean when the disagreement is bigger than the width of the
          error distribution behind our own number. Below that, we agree. */
-      lean = (edge !== null && Math.abs(edge) >= 0.08)
+      lean = (Math.abs(edge) >= leanBand())
         ? '<span class="tag ' + (edge > 0 ? 'good' : 'bad') + '">'
           + (edge > 0 ? 'OVER' : 'UNDER') + '</span>'
         : '<span class="slot">line looks right</span>';
+    } else if (e.p !== null) {
+      /* We have a number but the book posted no price on one side, so there is nothing
+         to disagree WITH. Saying "line looks right" here asserts an agreement that was
+         never computed — edge is null and the old test only checked our own side. */
+      lean = '<span class="slot">no price</span>';
     }
     html += '<tr class="nb"><td class="l who"' + teamStyle(row.p.team) + '>'
       + avatar(row.p) + chip(row.p.position) + esc(row.p.name) + ' '
       + teamBadge(row.p.team) + '</td>'
       + '<td><b>' + e.line.toFixed(1) + '</b></td>'
+      + '<td class="odds">' + oddsPair(e) + '</td>'
       + '<td>' + (e.ours === null ? '—' : e.ours.toFixed(0)) + '</td>'
       + '<td>' + (e.pg === null ? '—' : e.pg.toFixed(1)) + '</td>'
+      + '<td>' + pctText(e.book) + '</td>'
+      + '<td>' + pctText(e.p) + '</td>'
       + '<td class="l">' + lean + '</td></tr>'
-      + '<tr class="why"><td colspan="5" class="l">'
+      + '<tr class="why"><td colspan="8" class="l">'
       + lineCommentary(row.p, stat, unit, e) + '</td></tr>';
   }
   host.innerHTML = html + '</tbody></table>';
@@ -2145,6 +2238,18 @@ function renderLines() {
     + ' The lean compares us against the book price with its margin stripped out, so a '
     + '−110/−110 market counts as a true coin flip rather than the 52.4% each side that '
     + 'the raw price implies.'
+    + '<br><br><b>The verdict is the two percentage columns subtracted, not the two '
+    + 'point columns.</b> That is why a large gap can read “line looks right” while a '
+    + 'smaller one leans: '
+    + '<b>(1)</b> the band is relative, so 100 yards is nothing on a 4,300-yard passing '
+    + 'line and a great deal on a 700-yard rushing one; '
+    + '<b>(2)</b> each stat regresses at its own width — rushing touchdowns run from '
+    + '0.62 to 1.24 of projection across the middle half of seasons, so the numbers have '
+    + 'to be ~16% apart to move the probability at all, where passing yards need ~7%; '
+    + '<b>(3)</b> the price moves the bar — most markets are hung near even money, but '
+    + 'about one in six is priced 4 points or more off it, and there we can sit close to '
+    + 'the line and still disagree with the bet. Each row says which of the three is '
+    + 'doing the work.'
     + '<br><br><b>We land on the under nearly every time, and here is the check on '
     + 'that.</b> Rather than argue about it, take running backs who finished a season '
     + 'in a given tier and look at what they actually rushed for the NEXT year — which '
@@ -3318,6 +3423,24 @@ function sourceSummary(weights) {
   return parts.join(' · ');
 }
 
+/* THE CONTROL BAR LIVES ON START / SIT ONLY.
+   Week and Scoring preset are global state — every view that reads them reads the same
+   two values — so they are set in one place instead of hovering above all eight tabs.
+
+   On Season Insights and Draft the bar was not merely redundant, it was misleading:
+   traced through the entire call closure of renderLines, renderCatchingBacks,
+   renderDraft and renderPositionalRoi, not one of them touches state.week or score(),
+   so changing PPR there moved nothing and implied it should.
+
+   On Rankings, Waivers, Scores, Roster and Settings the two settings still apply in
+   full — they are simply changed from Start / Sit. That is the deliberate trade: one
+   home for the controls, at the cost of a tab switch to reach them. */
+var CONTROL_VIEWS = { startsit: 1 };
+
+function syncControls(view) {
+  document.getElementById('globalControls').hidden = !CONTROL_VIEWS[view];
+}
+
 function render() {
   var meta = document.getElementById('meta');
   meta.textContent = DATA.season + ' season · ' + PLAYERS.length.toLocaleString()
@@ -3355,6 +3478,7 @@ document.addEventListener('click', function (event) {
       document.getElementById('view-' + tabs[i].dataset.view).hidden = !on;
     }
     currentView = target.dataset.view;
+    syncControls(currentView);
     // Scores are fetched when you open the tab, not on page load: most visits never
     // look at them, and this is someone else's server.
     if (currentView === 'scores') renderScores(false);
@@ -3464,6 +3588,11 @@ document.addEventListener('change', function (event) {
       throw new Error('ON_CHANGE wired to missing element: #' + id);
     }
   }
+  // Same reasoning for the card syncControls hides: a renamed id here would not throw
+  // on its own, it would just leave the bar showing on every view again.
+  if (!document.getElementById('globalControls')) {
+    throw new Error('syncControls wired to missing element: #globalControls');
+  }
   var select = document.getElementById('week'), html = '';
   for (var i = 0; i < DATA.weeks.length; i++) {
     html += '<option value="' + DATA.weeks[i] + '">Week ' + DATA.weeks[i] + '</option>';
@@ -3471,6 +3600,7 @@ document.addEventListener('change', function (event) {
   select.innerHTML = html;
   select.value = state.week;
   document.getElementById('format').value = state.format;
+  syncControls(currentView);
   render();
 }());
 </script>
