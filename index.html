@@ -195,6 +195,7 @@
   #view-rankings { --section: #7c5cff; }
   #view-waivers  { --section: #199e70; }
   #view-season   { --section: #d98a26; }
+  #view-trade    { --section: #c04a8b; }
   #view-draft    { --section: #d95926; }
   #view-scores   { --section: #b83d70; }
   #view-roster   { --section: #2aa8b8; }
@@ -392,6 +393,25 @@
   .fc .spread.mid   { color: var(--warn); }
   .fc .spread.wide  { color: var(--serious); }
 
+  /* Two picking columns side by side, stacking on a narrow screen. */
+  .tradegrid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 720px) { .tradegrid { grid-template-columns: 1fr; } }
+  .tradepick { max-height: 300px; border: 1px solid var(--line-soft);
+               border-radius: 10px; padding: 6px; }
+  .tradepick label { display: flex; align-items: center; gap: 8px; padding: 5px 6px;
+                     border-radius: 7px; font-size: 13px; color: var(--text);
+                     margin: 0; cursor: pointer; }
+  .tradepick label:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .tradepick input { width: auto; margin: 0; }
+  .tradepick .val { margin-left: auto; color: var(--dim); font-size: 12px;
+                    font-variant-numeric: tabular-nums; }
+  /* Verdict bar: one row per side, so the two deltas are read against each other. */
+  .verdictrow { display: flex; align-items: baseline; gap: 10px; margin: 4px 0;
+                font-variant-numeric: tabular-nums; }
+  .verdictrow .who { min-width: 190px; color: var(--dim); font-size: 13px; }
+  .verdictrow .delta { font-size: 20px; font-weight: 700; }
+  .up   { color: var(--good); }
+  .down { color: var(--critical); }
   .slot { color: var(--muted); font-size: 11px; letter-spacing: .5px; }
   /* Both sides of a market, stacked so the column stays narrow. Tabular figures keep
      the two prices aligned under each other. */
@@ -597,6 +617,7 @@
     <button class="tab" role="tab" data-view="rankings" aria-selected="false">Rankings</button>
     <button class="tab" role="tab" data-view="waivers" aria-selected="false">Waivers</button>
     <button class="tab" role="tab" data-view="season" aria-selected="false">Season Insights</button>
+    <button class="tab" role="tab" data-view="trade" aria-selected="false">Trades</button>
     <button class="tab" role="tab" data-view="draft" aria-selected="false">Draft</button>
     <button class="tab" role="tab" data-view="scores" aria-selected="false">Scores</button>
     <button class="tab" role="tab" data-view="roster" aria-selected="false">Roster</button>
@@ -633,6 +654,18 @@
     <div class="card">
       <h2>Bench</h2>
       <div id="bench"></div>
+    </div>
+    <div class="card">
+      <h2>Why this projection
+        <span class="tag">exact contributions, your scoring</span></h2>
+      <div class="row" id="whyPick" style="align-items:flex-end;margin-bottom:10px">
+        <div style="flex:1 1 260px">
+          <label for="whyplayer">Player</label>
+          <select id="whyplayer" style="width:100%"></select>
+        </div>
+      </div>
+      <div id="whyBreakdown"></div>
+      <div class="note" id="whyNote"></div>
     </div>
   </section>
 
@@ -738,6 +771,43 @@
     </div>
   </section>
 
+  <section class="view" id="view-trade" hidden>
+    <div class="card">
+      <h2>Where this roster is thin
+        <span class="tag">rest of season, your scoring</span></h2>
+      <div id="tradeShape"></div>
+      <div class="note" id="tradeShapeNote"></div>
+    </div>
+
+    <div class="card">
+      <h2>Grade a trade</h2>
+      <div class="row" style="align-items:flex-end;margin-bottom:10px">
+        <div>
+          <label for="tradepartner">Trading with</label>
+          <select id="tradepartner"></select>
+        </div>
+      </div>
+      <div class="tradegrid">
+        <div>
+          <label>You send</label>
+          <div id="tradeMine" class="scroll tradepick"></div>
+        </div>
+        <div>
+          <label>You get</label>
+          <div id="tradeTheirs" class="scroll tradepick"></div>
+        </div>
+      </div>
+      <div id="tradeVerdict"></div>
+      <div class="note" id="tradeVerdictNote"></div>
+    </div>
+
+    <div class="card">
+      <h2>Trades worth asking about</h2>
+      <div id="tradeIdeas"></div>
+      <div class="note" id="tradeIdeasNote"></div>
+    </div>
+  </section>
+
   <section class="view" id="view-draft" hidden>
     <div class="card">
       <h2>Your draft plan</h2>
@@ -754,7 +824,20 @@
       <div id="draftPlan"></div>
     </div>
     <div class="card">
-      <h2>Positional scarcity</h2>
+      <h2>What actually won
+        <span class="tag">measured, 2019–2025</span></h2>
+      <div id="draftWinners"></div>
+      <div class="note" id="draftWinnersNote"></div>
+    </div>
+    <div class="card">
+      <h2>The three arguments, settled</h2>
+      <div id="draftDuels"></div>
+      <div class="note" id="draftDuelsNote"></div>
+    </div>
+    <div class="card">
+      <h2>Positional scarcity
+        <span class="tag">why an early pick is worth more at some positions</span></h2>
+      <div class="note" id="vorIntro"></div>
       <div id="draftCliffs"></div>
       <div class="note" id="vorNote"></div>
     </div>
@@ -1769,6 +1852,92 @@ function benchmarkLineup(week) {
   return total;
 }
 
+/* squadShape runs the optimiser once per position per remaining week, which is fine
+   on the Trades tab and far too expensive to repeat on every keystroke in the scoring
+   editor. The answer only changes when the roster, the week, the slots or the scoring
+   change, so it is memoised on exactly those. */
+var shapeCache = { key: null, value: null, base: 0, weeks: 0 };
+
+function squadKey() {
+  return state.roster.join(',') + '|' + scoringKey();
+}
+
+function cachedShape() {
+  var key = squadKey();
+  if (shapeCache.key === key) return shapeCache;
+  var weeks = remainingWeeks();
+  var base = squadTotal(state.roster, weeks);
+  shapeCache = { key: key, value: squadShape(state.roster, weeks, base),
+                 base: base, weeks: weeks.length };
+  return shapeCache;
+}
+
+/* WHAT THIS ROSTER ACTUALLY LOOKS LIKE, in prose.
+   The note this replaces ended by rebutting the "good teams score 125 a week" rule of
+   thumb. That was worth saying once; repeating it every week told the reader about a
+   rule of thumb rather than about their own team. What a manager wants here is three
+   things — am I ahead, who is carrying me, and where am I exposed — and the last of
+   those is only answerable in lineup points over the rest of the season, which is the
+   same measurement the Trades tab is built on. */
+function squadReport(result, par, gap) {
+  var bits = [];
+  bits.push('A middling ' + LEAGUE_SIZE + '-team starting lineup projects <b>'
+    + par.toFixed(1) + '</b> this week, so you are '
+    + (Math.abs(gap) < 3
+        ? 'right about level with it'
+        : '<b>' + Math.abs(gap).toFixed(1) + ' points '
+          + (gap > 0 ? 'ahead' : 'behind') + '</b>')
+    + ', computed from this week’s projections under your scoring and your slots.');
+
+  /* Who is carrying the week. Concentration is the thing worth knowing: two men
+     supplying half your points is a different team from eleven supplying it evenly,
+     and it is the shape that decides how badly one injury hurts. */
+  var starters = [];
+  for (var i = 0; i < result.lineup.length; i++) {
+    if (result.lineup[i].entry) starters.push(result.lineup[i].entry);
+  }
+  starters.sort(function (a, b) { return b.points - a.points; });
+  if (starters.length >= 3 && result.total > 0) {
+    var topTwo = starters[0].points + starters[1].points;
+    var share = topTwo / result.total;
+    bits.push('<b>' + esc(starters[0].player.name) + '</b> and <b>'
+      + esc(starters[1].player.name) + '</b> are '
+      + Math.round(share * 100) + '% of it'
+      + (share > 0.42
+          ? ' — top-heavy, so one bad Sunday from either shows up in the result.'
+          : ', which is a fairly even spread across the lineup.'));
+  }
+
+  /* Where the roster is exposed, over the rest of the season rather than this week:
+     a one-week hole is a matchup, a season-long one is a roster problem. */
+  var shaped = cachedShape(), rows = shaped.value;
+  var thin = [], deep = [];
+  for (var s = 0; s < rows.length; s++) {
+    if (rows[s].gain > 8) thin.push(rows[s]);
+    else if (rows[s].gain <= TRADE_MIN_GAIN) deep.push(rows[s]);
+  }
+  if (thin.length) {
+    var names = [];
+    for (var t = 0; t < thin.length && t < 2; t++) {
+      names.push('<b>' + thin[t].position + '</b> (a middling starter there would add '
+        + thin[t].gain.toFixed(0) + ')');
+    }
+    bits.push('Over the remaining ' + shaped.weeks + ' weeks the thin spot is '
+      + names.join(' and ') + '.'
+      + (deep.length
+          ? ' You are set at ' + deep[deep.length - 1].position
+            + (deep.length > 1 ? ' and ' + deep[deep.length - 2].position : '')
+            + ', so that is the surplus to trade from — the Trades tab names who to '
+            + 'ask and what it is worth.'
+          : ' The Trades tab scores specific swaps against it.'));
+  } else if (rows.length) {
+    bits.push('Over the remaining ' + shaped.weeks + ' weeks no position is a hole — '
+      + 'a middling starter anywhere would add under 8 points to your lineup, which '
+      + 'is what a genuinely balanced roster looks like.');
+  }
+  return bits.join(' ');
+}
+
 function squadStrip(lineup) {
   var html = '<div class="squad">';
   for (var i = 0; i < lineup.length; i++) {
@@ -1804,6 +1973,10 @@ function renderStartSit() {
   if (!entries.length) {
     box.innerHTML = '<div class="empty">No players yet — add some on the Roster tab.</div>';
     benchBox.innerHTML = '';
+    // Still render the breakdown card, which has its own empty state. Returning here
+    // without it left a bare label and an empty dropdown sitting under two explained
+    // cards — the one thing on the page that looked broken rather than unfilled.
+    renderWhy();
     return;
   }
   var result = optimize(entries);
@@ -1833,22 +2006,322 @@ function renderStartSit() {
         + '<b style="left:' + Math.round(100 * par / scale) + '%"></b></div>' : '')
     + '</div>';
   if (par) {
-    html += '<div class="note">A middling ' + LEAGUE_SIZE + '-team starting lineup '
-      + 'projects <b>' + par.toFixed(1) + '</b> this week, so you are '
-      + (Math.abs(gap) < 3
-          ? 'right about level with it'
-          : '<b>' + Math.abs(gap).toFixed(1) + ' points ' + (gap > 0 ? 'ahead' : 'behind')
-            + '</b>')
-      + '. Computed from this week’s projections under your scoring and your slots '
-      + '— not the usual 125-a-week rule of thumb, which assumes full PPR and '
-      + 'somebody else’s lineup.</div>';
+    html += '<div class="note">' + squadReport(result, par, gap) + '</div>';
   }
   box.innerHTML = html;
 
-  if (!result.bench.length) { benchBox.innerHTML = '<div class="empty">Nobody benched.</div>'; return; }
-  var bench = '<div class="scroll"><table>' + TABLE_HEAD + '<tbody class="bench">';
-  for (var b = 0; b < result.bench.length; b++) bench += playerRow(result.bench[b]);
-  benchBox.innerHTML = bench + '</tbody></table></div>';
+  if (!result.bench.length) {
+    benchBox.innerHTML = '<div class="empty">Nobody benched.</div>';
+  } else {
+    var bench = '<div class="scroll"><table>' + TABLE_HEAD + '<tbody class="bench">';
+    for (var b = 0; b < result.bench.length; b++) bench += playerRow(result.bench[b]);
+    benchBox.innerHTML = bench + '</tbody></table></div>';
+  }
+  renderWhy();
+}
+
+/* ---- why a projection is what it is -------------------------------------
+
+   An exact Shapley decomposition of the model's own projection, computed HERE rather
+   than shipped as finished numbers, for one reason: the scoring panel rewrites every
+   projection live, and a breakdown baked in Python under standard PPR would quietly
+   describe a different league than the one on screen. Rebuilding it from the driver
+   table means the explanation follows the user's own scoring, including a config where
+   a reception is worth nothing and the whole shape of the answer changes.
+
+   Two layers, because they answer different questions:
+
+     metrics      absent = the positional baseline, so the base value is a league-
+                  average player and each contribution reads as what THIS player's
+                  profile is worth over average.
+     adjustments  absent = 1.0, the model's own no-op, so a factor that does not apply
+                  contributes exactly zero rather than approximately zero.
+
+   Exact, not sampled: eight metrics is 256 coalitions, and only the player on screen
+   is ever computed. See tools/fantasy/explain.py, which is the same arithmetic and
+   carries the audit. */
+
+var SPEC = DATA.spec || {};
+
+function specMetrics(position) {
+  var spec = SPEC[position];
+  if (!spec) return [];
+  var out = [], i;
+  for (i = 0; i < (spec.volumes || []).length; i++) out.push(spec.volumes[i][1]);
+  for (i = 0; i < (spec.rates || []).length; i++) out.push(spec.rates[i][2]);
+  return out;
+}
+
+/* Rebuild a stat line, taking each metric from the player's projection or from the
+   positional baseline. Mirrors the model's assembly: volumes stand alone, and a rate
+   multiplies the volume it is a rate OF — so switching a volume off correctly drags
+   every rate built on it down too. */
+function statsFrom(position, drivers, use) {
+  var spec = SPEC[position];
+  if (!spec) return {};
+  var stats = {}, i, entry;
+  function val(metric) {
+    entry = drivers[metric] || {};
+    var v = use[metric] ? entry.p : entry.b;
+    return v === undefined || v === null ? 0 : v;
+  }
+  for (i = 0; i < (spec.volumes || []).length; i++) {
+    stats[spec.volumes[i][0]] = val(spec.volumes[i][1]);
+  }
+  for (i = 0; i < (spec.rates || []).length; i++) {
+    var rate = spec.rates[i];
+    stats[rate[0]] = (stats[rate[1]] || 0) * val(rate[2]);
+  }
+  return stats;
+}
+
+function factorial(n) { var out = 1; for (var i = 2; i <= n; i++) out *= i; return out; }
+
+/* Every subset of `names`, as an array of objects used as sets. 2^n, n<=8. */
+function subsets(names) {
+  var out = [{}], i, j;
+  for (i = 0; i < names.length; i++) {
+    var grown = [];
+    for (j = 0; j < out.length; j++) {
+      var copy = {}, k;
+      for (k in out[j]) if (out[j].hasOwnProperty(k)) copy[k] = true;
+      copy[names[i]] = true;
+      grown.push(copy);
+    }
+    out = out.concat(grown);
+  }
+  return out;
+}
+
+function setKey(names, set) {
+  var key = '', i;
+  for (i = 0; i < names.length; i++) key += set[names[i]] ? '1' : '0';
+  return key;
+}
+
+function metricShapley(position, drivers) {
+  var names = [], all = specMetrics(position), i;
+  for (i = 0; i < all.length; i++) if (drivers[all[i]]) names.push(all[i]);
+  var n = names.length;
+  if (!n) return null;
+
+  var cache = {}, sets = subsets(names), s;
+  for (s = 0; s < sets.length; s++) {
+    cache[setKey(names, sets[s])] = score(statsFrom(position, drivers, sets[s]));
+  }
+
+  var phi = {}, weightFor = [];
+  for (i = 0; i < n; i++) weightFor.push(factorial(i) * factorial(n - i - 1) / factorial(n));
+
+  for (i = 0; i < n; i++) {
+    var name = names[i], total = 0;
+    for (s = 0; s < sets.length; s++) {
+      var set = sets[s];
+      if (set[name]) continue;
+      var size = 0, k;
+      for (k in set) if (set.hasOwnProperty(k)) size++;
+      var without = setKey(names, set);
+      set[name] = true;
+      var withIt = setKey(names, set);
+      delete set[name];
+      total += weightFor[size] * (cache[withIt] - cache[without]);
+    }
+    phi[name] = total;
+  }
+  return { phi: phi, names: names, average: cache[setKey(names, {})] };
+}
+
+function adjustmentShapley(base, mults) {
+  var names = [], k;
+  for (k in mults) {
+    if (mults.hasOwnProperty(k) && mults[k] !== 1 && mults[k] !== null) names.push(k);
+  }
+  var n = names.length;
+  if (!n) return {};
+  var sets = subsets(names), phi = {}, weightFor = [], i, s;
+  for (i = 0; i < n; i++) weightFor.push(factorial(i) * factorial(n - i - 1) / factorial(n));
+
+  function value(set) {
+    var out = base, key;
+    for (key in set) if (set.hasOwnProperty(key)) out *= mults[key];
+    return out;
+  }
+  for (i = 0; i < n; i++) {
+    var name = names[i], total = 0;
+    for (s = 0; s < sets.length; s++) {
+      var set = sets[s];
+      if (set[name]) continue;
+      var size = 0, key;
+      for (key in set) if (set.hasOwnProperty(key)) size++;
+      var before = value(set);
+      set[name] = true;
+      var after = value(set);
+      delete set[name];
+      total += weightFor[size] * (after - before);
+    }
+    phi[name] = total;
+  }
+  return phi;
+}
+
+var METRIC_LABELS = {
+  targets_pg: 'targets a game', carries_pg: 'carries a game',
+  pass_att_pg: 'pass attempts a game', rush_att_pg: 'rush attempts a game',
+  catch_rate: 'catch rate', yd_per_target: 'yards per target',
+  td_per_target: 'TDs per target', yd_per_carry: 'yards per carry',
+  td_per_carry: 'TDs per carry', cmp_rate: 'completion rate',
+  yd_per_att: 'yards per attempt', td_per_att: 'TDs per attempt',
+  int_per_att: 'interceptions per attempt', rush_yd_per_att: 'rushing yards per carry',
+  rush_td_per_att: 'rushing TDs per carry'
+};
+var ADJUST_LABELS = {
+  matchup: 'this opponent', weather: 'weather', environment: 'the game total',
+  team_change: 'changed teams', availability: 'injury report'
+};
+
+function renderWhy() {
+  var host = document.getElementById('whyBreakdown');
+  var note = document.getElementById('whyNote');
+  var select = document.getElementById('whyplayer');
+  var entries = rosterEntries();
+
+  // style.display, not the `hidden` attribute: .row sets display:flex, and an explicit
+  // display rule beats the UA stylesheet's [hidden]{display:none}, so the empty
+  // dropdown stayed on screen looking broken.
+  document.getElementById('whyPick').style.display = entries.length ? '' : 'none';
+  if (!entries.length) {
+    select.innerHTML = '';
+    select.removeAttribute('data-ids');
+    host.innerHTML = '<div class="empty">Add players on the Roster tab to see how '
+      + 'their projections are built.</div>';
+    note.innerHTML = '';
+    return;
+  }
+  /* Rebuild the list only when the roster changes, so switching player does not reset
+     the user's own choice back to the top of the lineup on every re-render. */
+  var wanted = [], i;
+  for (i = 0; i < entries.length; i++) wanted.push(entries[i].player.gsis_id);
+  if (select.getAttribute('data-ids') !== wanted.join(',')) {
+    var opts = '';
+    for (i = 0; i < entries.length; i++) {
+      opts += '<option value="' + entries[i].player.gsis_id + '">'
+        + esc(entries[i].player.name) + ' (' + entries[i].player.position
+        + ')</option>';
+    }
+    select.innerHTML = opts;
+    select.setAttribute('data-ids', wanted.join(','));
+  }
+
+  var chosen = null;
+  for (i = 0; i < entries.length; i++) {
+    if (entries[i].player.gsis_id === select.value) chosen = entries[i];
+  }
+  chosen = chosen || entries[0];
+  var player = chosen.player;
+  var drivers = player.drivers;
+  var week = chosen.week || {};
+
+  if (!drivers) {
+    host.innerHTML = '<div class="empty">No breakdown for ' + esc(player.name)
+      + '.</div>';
+    note.innerHTML = player.position === 'K' || player.position === 'DST'
+      ? '<b>Kickers and defences are not assembled from parts.</b> They get a shrunk '
+        + 'trailing average of their own raw stats rather than a volume-times-rate '
+        + 'model, because nothing about either repeats well enough week to week to '
+        + 'build one. There is no breakdown to show, and inventing one would be '
+        + 'describing a model that does not exist.'
+      : '<b>No history to decompose.</b> This is a rookie or a player with no prior '
+        + 'games, projected from draft capital instead of from his own record.';
+    return;
+  }
+
+  var result = metricShapley(player.position, drivers);
+  if (!result) { host.innerHTML = '<div class="empty">No breakdown.</div>'; return; }
+  var unadjusted = result.average, k;
+  for (k in result.phi) if (result.phi.hasOwnProperty(k)) unadjusted += result.phi[k];
+  var adj = adjustmentShapley(unadjusted, week.adjustments || {});
+
+  var rows = [];
+  for (i = 0; i < result.names.length; i++) {
+    rows.push({ name: result.names[i], v: result.phi[result.names[i]], kind: 'm' });
+  }
+  rows.sort(function (a, b) { return Math.abs(b.v) - Math.abs(a.v); });
+  var adjRows = [];
+  for (k in adj) if (adj.hasOwnProperty(k)) adjRows.push({ name: k, v: adj[k] });
+  adjRows.sort(function (a, b) { return Math.abs(b.v) - Math.abs(a.v); });
+
+  var span = 0;
+  for (i = 0; i < rows.length; i++) span = Math.max(span, Math.abs(rows[i].v));
+  for (i = 0; i < adjRows.length; i++) span = Math.max(span, Math.abs(adjRows[i].v));
+  span = span || 1;
+
+  function bar(v) {
+    var pctw = Math.round(100 * Math.abs(v) / span) / 2;
+    var side = v >= 0 ? 'left:50%' : 'right:50%';
+    return '<span style="display:inline-block;position:relative;width:120px;'
+      + 'height:9px;background:var(--line);border-radius:2px;vertical-align:middle">'
+      + '<i style="position:absolute;' + side + ';top:0;height:9px;width:' + pctw
+      + '%;border-radius:2px;background:' + (v >= 0 ? 'var(--good)' : 'var(--bad)')
+      + '"></i></span>';
+  }
+
+  var html = '<table><tbody>';
+  html += '<tr><td class="l"><b>A league-average ' + player.position + '</b></td>'
+    + '<td></td><td><b>' + result.average.toFixed(2) + '</b></td></tr>';
+  for (i = 0; i < rows.length; i++) {
+    var d = drivers[rows[i].name] || {};
+    var own = d.w === undefined ? null : d.w;
+    html += '<tr><td class="l">' + esc(METRIC_LABELS[rows[i].name] || rows[i].name)
+      + (own === null ? '' : '<br><span class="slot">' + Math.round(own * 100)
+          + '% his own number, ' + (100 - Math.round(own * 100)) + '% league</span>')
+      + '</td><td>' + bar(rows[i].v) + '</td>'
+      + '<td class="' + (rows[i].v >= 0 ? 'up' : 'down') + '">'
+      + (rows[i].v >= 0 ? '+' : '') + rows[i].v.toFixed(2) + '</td></tr>';
+  }
+  html += '<tr class="nb"><td class="l"><b>Before this week&rsquo;s context</b></td>'
+    + '<td></td><td><b>' + unadjusted.toFixed(2) + '</b></td></tr>';
+  if (!adjRows.length) {
+    html += '<tr><td class="l"><span class="slot">nothing adjusts him this week</span>'
+      + '</td><td></td><td>—</td></tr>';
+  }
+  for (i = 0; i < adjRows.length; i++) {
+    html += '<tr><td class="l">' + esc(ADJUST_LABELS[adjRows[i].name]
+        || adjRows[i].name) + '</td><td>' + bar(adjRows[i].v) + '</td>'
+      + '<td class="' + (adjRows[i].v >= 0 ? 'up' : 'down') + '">'
+      + (adjRows[i].v >= 0 ? '+' : '') + adjRows[i].v.toFixed(2) + '</td></tr>';
+  }
+  var total = unadjusted;
+  for (i = 0; i < adjRows.length; i++) total += adjRows[i].v;
+  html += '<tr><td class="l"><b>The model&rsquo;s projection</b></td><td></td>'
+    + '<td><b>' + total.toFixed(2) + '</b></td></tr></tbody></table>';
+  host.innerHTML = html;
+
+  var top = rows.length ? rows[0] : null;
+  var blended = week.points;
+  note.innerHTML = '<b>How to read this.</b> Every line is an exact contribution in '
+    + '<i>your</i> scoring, and they add up: start from what a league-average '
+    + esc(player.position) + ' would score, add what makes this player different, then '
+    + 'add what this week does to him. Nothing is left over in a residual.'
+    + (top ? ' For ' + esc(player.name) + ' the projection is mostly one thing — <b>'
+        + esc(METRIC_LABELS[top.name] || top.name) + '</b>, worth '
+        + (top.v >= 0 ? '+' : '') + top.v.toFixed(2) + ' points on its own.' : '')
+    + '<br><br><b>The percentage under each line is the model’s confidence in it.</b> '
+    + 'Volume is the player’s own: how many targets or carries he gets repeats '
+    + 'season to season, so the model trusts his number. Efficiency barely repeats at '
+    + 'all, so catch rate and yards per target are pulled almost entirely to the league '
+    + 'baseline no matter what he did last year. That is why the breakdown is nearly '
+    + 'always dominated by opportunity — it is the only part the model believes.'
+    + '<br><br><b>Order does not matter here, and that is not free.</b> The adjustments '
+    + 'multiply, so crediting them one at a time would hand different amounts to the '
+    + 'same factor depending which you counted first. These are Shapley values — the '
+    + 'average over every possible order — which is the only split that is both '
+    + 'order-free and adds exactly to the total.'
+    + (blended === undefined ? ''
+        : '<br><br><b>This explains our own model, not the number in your lineup.</b> '
+          + 'That one is ' + blended.toFixed(1) + ', a blend of our model with Sleeper '
+          + 'and ESPN — our model gets ' + Math.round(100 * (DATA.blend_weights.own
+              || 0)) + '% of the vote, because it measurably loses to the market on its '
+          + 'own. This panel opens up our share of it.');
 }
 
 /* The Rankings tab serves both horizons. Weekly and season answer the same question
@@ -1987,6 +2460,15 @@ function fmtGap(n) {
   return n >= 10 ? String(Math.round(n)) : n.toFixed(1);
 }
 
+/* A per-game rate, with the precision the quantity deserves. Yards a game round
+   fine; touchdowns a game do not — rounding 1.4 to "1" turned the full-strength
+   split into "managed 1 rushing tds a game, and 1 in the games he did not", which
+   states a difference and then hides it. */
+function perGame(n) {
+  if (n === null || n === undefined) return '—';
+  return Math.abs(n) >= 10 ? String(Math.round(n)) : n.toFixed(1);
+}
+
 /* WHY THE VERDICT CAME OUT THAT WAY.
    The table shows points and the verdict is computed from probabilities, which makes
    the column look arbitrary — a big gap can read "line looks right" while a small one
@@ -2035,6 +2517,23 @@ function leanCommentary(e, unit) {
 function lineCommentary(player, stat, unit, e) {
   var bits = [];
 
+  /* ROLE CHANGE, STATED FIRST, because it invalidates everything after it.
+     This panel projects from our own model, which reads a player's own history — so a
+     man who was a backup last season is projected as one, however plainly he has the
+     job now. Sleeper and ESPN do know, and when their blended view of him runs far
+     above ours that disagreement IS the signal. Saying so is the honest move: the
+     alternative was a row quietly claiming a starting quarterback throws for 102 yards
+     a game. */
+  if (e.role && e.role >= 1.2) {
+    bits.push('<b class="tag bad">role change</b> <b>Treat this row with suspicion.</b> '
+      + 'Our season model projects from this player’s own history, and his history is '
+      + 'of a smaller job — the market sources rate him <b>'
+      + Math.round((e.role - 1) * 100) + '% higher</b> per game than we do, which is '
+      + 'them knowing about a promotion our history cannot see. The weekly projections '
+      + 'on the other tabs blend all three and already reflect it; this season number '
+      + 'does not, because its error calibration is fitted against our own model alone.');
+  }
+
   if (e.waspg !== undefined && e.was !== undefined) {
     bits.push('Last season ' + e.was.toFixed(0) + ' ' + unit + ' in ' + e.wasg
       + ' games (' + e.waspg.toFixed(1) + ' a game).');
@@ -2047,6 +2546,32 @@ function lineCommentary(player, stat, unit, e) {
     bits.push('We expect <b>' + e.pg.toFixed(1) + ' a game</b> over ' + e.games.toFixed(1)
       + ' games — a starter misses two or three, and the line is a season total, so '
       + 'those count. That is ' + e.ours.toFixed(0) + ' for the year.');
+    /* SPLIT THE DISAGREEMENT INTO ITS TWO HALVES.
+       Nearly every row on this panel sits under the line, and from the numbers on
+       screen there is no way to tell whether we think the player is worse per game or
+       simply expect him to play less. Those call for opposite reactions, and the
+       second is usually the whole story: at the same per-game rate, the difference
+       between 14 games and 17 is 20% of a season total. Dividing the book's line by
+       our own per-game rate says what games count the book must be assuming, so the
+       reader can see which half of the disagreement is doing the work. */
+    var impliedGames = e.line / e.pg;
+    if (impliedGames > 0) {
+      bits.push(impliedGames > 17.5
+        ? 'Note the book is at ' + e.line.toFixed(0) + ', which our per-game rate could '
+          + 'not reach in a <b>perfect 17-game season</b> — so this gap is about the '
+          + 'rate, not about games missed. We think he is worse per game than the '
+          + 'market does.'
+        : 'At our per-game rate the book’s ' + e.line.toFixed(0) + ' needs <b>'
+          + impliedGames.toFixed(1) + ' games</b>, against the ' + e.games.toFixed(1)
+          + ' we project'
+          + (impliedGames - e.games > 1.5
+              ? ' — so most of this gap is the games estimate rather than a '
+                + 'disagreement about the player. Our figure regresses him toward what '
+                + 'his position actually plays, injuries and lost jobs included; the '
+                + 'book is pricing closer to a full season.'
+              : ', so the two are close and the disagreement is about the player '
+                + 'himself.'));
+    }
   }
 
   if (e.waspg !== undefined && e.pg !== null && e.waspg > 0) {
@@ -2071,9 +2596,9 @@ function lineCommentary(player, stat, unit, e) {
     var gap = split.full - split.short;
     if (Math.abs(gap) / Math.max(split.full, 1) >= 0.1) {
       bits.push('<b>Read last season carefully.</b> ' + esc(player.team) + ' managed '
-        + split.full.toFixed(0) + ' ' + unit + ' a game in the ' + split.played
+        + perGame(split.full) + ' ' + unit + ' a game in the ' + split.played
         + ' games ' + esc(split.qb || split.who) + ' played, and '
-        + split.short.toFixed(0) + ' in the ' + split.missed + ' he did not — so the '
+        + perGame(split.short) + ' in the ' + split.missed + ' he did not — so the '
         + 'raw season total understates what this offence does at full strength.');
     }
   }
@@ -2127,7 +2652,12 @@ function lineCommentary(player, stat, unit, e) {
   /* The offensive line, with its measured size attached. It is small — 2.1 yards a
      game for the rebuild, 2.4 for health — and saying so is the point: the narrative
      around lines is far larger than the effect. */
-  if (stat === 'rush_yd' || stat === 'rush_td') {
+  /* Rushing YARDS only. The offensive-line study measured yards per game and nothing
+     else, so printing "worth about two rushing yards a game" underneath a rushing
+     TOUCHDOWN line was answering a question nobody asked — the reader is looking at a
+     TD market and the sentence talks about yardage. There is no measured line-to-
+     touchdown effect to substitute, and inventing one would be worse than the silence. */
+  if (stat === 'rush_yd') {
     var line = (TRENCH.teams || {})[player.team];
     if (line) {
       var pieces = [];
@@ -2567,12 +3097,14 @@ function renderPositionalRoi() {
       + 'replacement — nothing at all, because the twelfth-best quarterback is nearly '
       + 'as good as the best one and somebody is always available.';
   }
-  note += '<br><br><b>What this cannot tell you.</b> Historical ADP is not published, '
-    + 'so where a player <i>finished</i> stands in for what he <i>cost</i>. That says '
-    + 'nothing about rookies, who have no prior season and are often round-one picks, '
-    + 'and it treats "finished RB4" as though it were "cost an RB4 pick" when a hyped '
-    + 'breakout can go two rounds above his finish. It is an argument about the '
-    + 'position, not a projection for any player.';
+  note += '<br><br><b>What this cannot tell you.</b> Where a player <i>finished</i> '
+    + 'stands in for what he <i>cost</i>. That says nothing about rookies, who have no '
+    + 'prior season and are often round-one picks, and it treats "finished RB4" as '
+    + 'though it were "cost an RB4 pick" when a hyped breakout can go two rounds above '
+    + 'his finish. It is an argument about the position, not a projection for any '
+    + 'player. <b>What actually won</b>, higher up this tab, answers the same question '
+    + 'against what players really cost — real draft boards, graded on real results — '
+    + 'and finds the same running back edge, smaller.';
   document.getElementById('roiNote').innerHTML = note;
 }
 
@@ -2836,6 +3368,37 @@ function lineupTotal(entries) {
   return optimize(entries).total;
 }
 
+/* A LEAGUE NOBODY IN IT ROSTERS A DEFENCE IS NOT A LEAGUE, IT IS A STALE IMPORT.
+   The stored league keeps gsis ids, resolved at import time against whatever data
+   file was loaded then. When a position had no provider id yet, every one of those
+   players silently failed to resolve — and the whole position then showed up as
+   free agents, all 32 defences ranked above the real waiver wire. The import is
+   cached in this browser, so fixing the data file cannot fix an import already
+   taken; only re-importing can, and nothing would otherwise say so. */
+function staleImportWarning() {
+  if (!LEAGUE || !LEAGUE.teams) return '';
+  var seen = {}, i, j;
+  for (i = 0; i < LEAGUE.teams.length; i++) {
+    var players = LEAGUE.teams[i].players || [];
+    for (j = 0; j < players.length; j++) {
+      var p = BY_ID[players[j]];
+      if (p) seen[p.position] = true;
+    }
+  }
+  var missing = [];
+  for (i = 0; i < TRADE_POSITIONS.length; i++) {
+    if (slotsAllow(TRADE_POSITIONS[i]) && !seen[TRADE_POSITIONS[i]]) {
+      missing.push(TRADE_POSITIONS[i]);
+    }
+  }
+  if (!missing.length) return '';
+  return '<br><span class="tag bad">stale import</span> Not one team in this league '
+    + 'rosters a ' + missing.join(' or ') + ', which cannot be true — every '
+    + missing.join('/') + ' is showing as a free agent below. Your league was imported '
+    + 'before this data file could identify them. <b>Re-import on the Roster tab</b> '
+    + 'and they will be attributed properly.';
+}
+
 function renderWaivers() {
   var position = document.getElementById('wpos').value;
   var horizon = +document.getElementById('whorizon').value;
@@ -2860,7 +3423,7 @@ function renderWaivers() {
   status.innerHTML = LEAGUE && LEAGUE.teams
     ? '<span class="tag good">' + esc(LEAGUE.name || 'league') + ' imported</span> '
       + 'Everyone owned by the other ' + (LEAGUE.teams.length - 1)
-      + ' teams is excluded, so this really is your waiver wire.'
+      + ' teams is excluded, so this really is your waiver wire.' + staleImportWarning()
     : '<span class="tag warn">no league imported</span> Showing everyone not on your '
       + 'roster. Some of them are owned in your league — import it on the Roster tab '
       + 'and this list becomes exact.';
@@ -3063,9 +3626,11 @@ var LEAGUE = state.league || DATA.league || null;
 
 var HELP = {
   sleeper: 'Sleeper: the long number in your league URL — '
-    + 'sleeper.com/leagues/<b>1234567890123456</b>/team. No sign-in needed.',
+    + 'sleeper.com/leagues/<b>1234567890123456</b>/team. No sign-in needed. '
+    + 'Pasting the whole URL is fine.',
   espn: 'ESPN: the leagueId in your league URL — '
     + 'fantasy.espn.com/football/league?leagueId=<b>123456</b>. '
+    + 'Pasting the whole URL is fine. '
     + 'Private leagues work if this browser is already signed in to ESPN.'
 };
 
@@ -3073,6 +3638,36 @@ function setStatus(text, kind) {
   var node = document.getElementById('importstatus');
   node.innerHTML = text ? '<span class="tag ' + (kind || '') + '">' + kind
     + '</span> ' + text : '';
+}
+
+/* PULL THE LEAGUE ID OUT OF WHATEVER GOT PASTED.
+   Both providers key on a bare number, and both bury it in a URL that is the obvious
+   thing to copy out of the address bar. Sending the whole URL through built a request
+   ESPN answers with a plain 400 — and a 400 from them carries NO
+   Access-Control-Allow-Origin, so the browser refuses to show the status to script and
+   fetch rejects with "TypeError: Failed to fetch". The importer then reported "Could
+   not reach ESPN", which reads as an outage or a CORS problem when the truth is simply
+   that the field was handed the wrong shape. Parse it here and the doomed request is
+   never made. Returns null when there is no plausible id in the text. */
+function parseLeagueId(raw) {
+  var text = String(raw).replace(/^\s+|\s+$/g, '');
+  if (!text) return null;
+  if (/^[0-9]+$/.test(text)) return text;            // already just the id
+  var keyed = /league(?:_?id)?[=\/]([0-9]+)/i.exec(text);   // ...?leagueId=123456
+  if (keyed) return keyed[1];
+  var path = /leagues?\/([0-9]{6,})/i.exec(text);    // sleeper.com/leagues/123.../team
+  if (path) return path[1];
+  /* Anything else: take the longest digit run, but only if it is long enough to be an
+     id rather than a season or a week that happened to be in the string. */
+  var runs = text.match(/[0-9]+/g);
+  if (runs) {
+    var best = runs[0];
+    for (var i = 1; i < runs.length; i++) {
+      if (runs[i].length > best.length) best = runs[i];
+    }
+    if (best.length >= 6) return best;
+  }
+  return null;
 }
 
 /* Resolve a provider's player id onto our rows. The foreign keys ship with the
@@ -3157,7 +3752,14 @@ function importEspn(id, done) {
       } else if (err === 404) {
         done('No ESPN league ' + esc(String(id)) + ' in ' + DATA.season + '.');
       } else {
-        done('Could not reach ESPN (' + err + ').');
+        /* A rejection that is not a status number means the response never reached
+           script. ESPN omits Access-Control-Allow-Origin on its error responses, so a
+           rejected league id arrives here as a TypeError with the status hidden — say
+           so, rather than blaming the network for what is usually a bad id. */
+        done('Could not reach ESPN (' + err + '). If the ID is wrong ESPN answers with '
+           + 'an error carrying no CORS header, which the browser reports exactly like '
+           + 'a network failure — so check that ' + esc(String(id)) + ' is the leagueId '
+           + 'from your league URL before assuming ESPN is down.');
       }
     });
 }
@@ -3195,36 +3797,850 @@ function rosteredElsewhere() {
   return owned;
 }
 
+/* ------------------------------------------------------------------ *
+ * Trades.
+ *
+ * Everything on this tab is measured in LINEUP points, never raw points, for
+ * exactly the reason the waiver table is: a player is worth what he adds to the
+ * side you actually start. A fourth good running back scores every Sunday and
+ * changes nothing. That one rule is what makes a trade gradeable — the swap is
+ * scored by re-optimising BOTH lineups across the remaining weeks and taking the
+ * difference, so a deal that looks level on points can be plainly good for one
+ * side, and a "star for star" swap can be worth nothing to either.
+ *
+ * Cost matters here in a way it does not elsewhere. optimize() is the Hungarian
+ * algorithm on a ~16x9 matrix; a naive scan of every pair against every team
+ * across every week is tens of thousands of those and would lock the page. Three
+ * things keep it responsive: per-team baselines are computed once, pairs are
+ * shortlisted on raw points before the optimiser is ever called, and the tab is
+ * rendered only while it is open.
+ * ------------------------------------------------------------------ */
+
+var TRADE_POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DST'];
+/* Each surviving pair costs 2 x weeks optimiser runs, so this is the knob that
+   decides whether the tab feels instant. Pairs are value-filtered first, so this
+   is a ceiling that is rarely reached. */
+var TRADE_PAIR_LIMIT = 4;
+/* Two players are only worth pairing if they are in the same value neighbourhood.
+   Nobody trades a WR1 for a backup tight end, and grading the 400 combinations
+   that will never be offered is where all the time would go. */
+var TRADE_VALUE_BAND = 0.45;
+/* Below this many lineup points over the rest of the season, a difference is
+   noise dressed as a recommendation. */
+var TRADE_MIN_GAIN = 1.0;
+/* Ideas kept per opponent. Without a cap, one well-matched partner floods the list
+   with permutations of the same two players and hides the other managers entirely. */
+var TRADE_PER_TEAM = 2;
+/* Exact gradings allowed per refresh. Each costs 2 x weeks optimiser runs, so this
+   is the single number that decides whether the tab is instant or a freeze. The
+   cheap pass orders the queue, so the budget is spent on the most promising
+   candidates rather than on whichever team happens to be first in the league. */
+var TRADE_GRADE_BUDGET = 14;
+
+var tradeState = { partner: null, out: {}, into: {} };
+
+/* Every week from the one being viewed to the end of the season. A trade is a
+   rest-of-season decision; grading it on one week answers a different question. */
+function remainingWeeks() {
+  var out = [], all = DATA.weeks, start = -1;
+  for (var i = 0; i < all.length; i++) if (String(all[i]) === state.week) start = i;
+  if (start < 0) start = 0;
+  for (var w = start; w < all.length; w++) out.push(String(all[w]));
+  return out;
+}
+
+/* Per-week entry lists for a squad, built once so a swap does not re-derive them. */
+function weeklyEntries(ids, weeks) {
+  var byWeek = [];
+  for (var w = 0; w < weeks.length; w++) {
+    var entries = [];
+    for (var i = 0; i < ids.length; i++) {
+      var p = BY_ID[ids[i]];
+      if (!p) continue;
+      var e = entryFor(p, weeks[w]);
+      if (e) entries.push(e);
+    }
+    byWeek.push(entries);
+  }
+  return byWeek;
+}
+
+function squadTotal(ids, weeks) {
+  var byWeek = weeklyEntries(ids, weeks), total = 0;
+  for (var w = 0; w < byWeek.length; w++) total += optimize(byWeek[w]).total;
+  return total;
+}
+
+/* ids with `drop` removed and `add` appended. Neither list is mutated. */
+function swapIds(ids, drop, add) {
+  var out = [], i;
+  for (i = 0; i < ids.length; i++) if (!drop[ids[i]]) out.push(ids[i]);
+  for (i = 0; i < add.length; i++) out.push(add[i]);
+  return out;
+}
+
+/* MEMO FOR THE THINGS THAT DO NOT DEPEND ON WHOSE ROSTER IS BEING MEASURED.
+   A probe is the same player whether it is my squad or the ninth manager's, and a
+   player's raw rest-of-season total likewise. Recomputing them per team meant
+   scanning a thousand players eighteen weeks deep sixty times over, which was six
+   seconds of the seven this tab took. Keyed on everything that can change the
+   numbers — week, slots, scoring — and on nothing that cannot. */
+var tradeMemo = { key: null, probe: {}, raw: {} };
+
+function scoringKey() {
+  var keys = Scoring.sortedKeys(state.config.per_stat), parts = [];
+  for (var i = 0; i < keys.length; i++) {
+    parts.push(keys[i] + ':' + state.config.per_stat[keys[i]]);
+  }
+  return state.week + '|' + slotList().join(',') + '|' + parts.join(',');
+}
+
+function tradeMemoFor() {
+  var key = scoringKey();
+  if (tradeMemo.key !== key) tradeMemo = { key: key, probe: {}, raw: {} };
+  return tradeMemo;
+}
+
+/* Raw rest-of-season points, used only to shortlist before the optimiser runs. */
+function rawOverWeeks(player, weeks) {
+  var memo = tradeMemoFor();
+  if (memo.raw[player.gsis_id] !== undefined) return memo.raw[player.gsis_id];
+  var total = 0;
+  for (var w = 0; w < weeks.length; w++) {
+    var e = entryFor(player, weeks[w]);
+    if (e && !e.week.is_bye) total += e.points;
+  }
+  memo.raw[player.gsis_id] = total;
+  return total;
+}
+
+/* A middling starter at this position — the same "what a normal team has in that
+   slot" idea benchmarkLineup uses, so the number on Start / Sit and the number
+   here are describing one league rather than two different imagined ones. */
+function positionProbe(position, weeks) {
+  var memo = tradeMemoFor();
+  if (memo.probe[position] !== undefined) return memo.probe[position];
+  var scored = [];
+  for (var i = 0; i < PLAYERS.length; i++) {
+    if (PLAYERS[i].position !== position) continue;
+    var total = rawOverWeeks(PLAYERS[i], weeks);
+    if (total > 0) scored.push({ p: PLAYERS[i], total: total });
+  }
+  scored.sort(function (a, b) { return b.total - a.total; });
+  var pick = scored[LEAGUE_SIZE - 1] || scored[scored.length - 1];
+  memo.probe[position] = pick ? pick.p : null;
+  return memo.probe[position];
+}
+
+/* WHERE A SQUAD IS THIN, in the only units that matter.
+   For each position: what would a middling starter there add to this lineup? A
+   big number means the slot is a hole. Zero means adding one more would never
+   crack the lineup, which is the definition of depth — and it is why this cannot
+   be read off a list of raw projections. */
+function squadShape(ids, weeks, base) {
+  var out = [];
+  for (var i = 0; i < TRADE_POSITIONS.length; i++) {
+    var position = TRADE_POSITIONS[i];
+    if (!slotsAllow(position)) continue;
+    var probe = positionProbe(position, weeks);
+    if (!probe) continue;
+    var gain = squadTotal(ids.concat([probe.gsis_id]), weeks) - base;
+    var owned = 0;
+    for (var j = 0; j < ids.length; j++) {
+      var p = BY_ID[ids[j]];
+      if (p && p.position === position) owned++;
+    }
+    out.push({ position: position, gain: gain, owned: owned, probe: probe });
+  }
+  out.sort(function (a, b) { return b.gain - a.gain; });
+  return out;
+}
+
+/* Does this league start the position at all? Nobody needs a kicker report in a
+   league with no kicker slot. */
+function slotsAllow(position) {
+  if (state.slots[position]) return true;
+  if (state.slots.FLEX && FLEX_OK[position]) return true;
+  if (state.slots.SUPERFLEX && SUPERFLEX_OK[position]) return true;
+  return false;
+}
+
+/* What losing this man would actually cost his own team. Small means expendable:
+   the lineup barely notices, whatever his raw total says. */
+function dropCost(ids, id, weeks, base) {
+  var drop = {};
+  drop[id] = true;
+  return base - squadTotal(swapIds(ids, drop, []), weeks);
+}
+
+/* Grade one proposed swap from both sides at once. */
+function gradeTrade(myIds, theirIds, sending, receiving, weeks, myBase, theirBase) {
+  var sendMap = {}, getMap = {}, i;
+  for (i = 0; i < sending.length; i++) sendMap[sending[i]] = true;
+  for (i = 0; i < receiving.length; i++) getMap[receiving[i]] = true;
+  var mine = swapIds(myIds, sendMap, receiving);
+  var theirs = theirIds ? swapIds(theirIds, getMap, sending) : null;
+  return {
+    mine: squadTotal(mine, weeks) - myBase,
+    theirs: theirs ? squadTotal(theirs, weeks) - theirBase : null
+  };
+}
+
+/* TRADES WORTH ASKING ABOUT.
+   A trade only happens when it helps both sides, so this looks for exactly that:
+   one of my players whose loss my lineup shrugs off, for one of theirs whose loss
+   THEIR lineup shrugs off, where each fills the other's hole. Everything is
+   one-for-one — multi-player deals explode the search space and the extra pieces
+   are usually makeweights anyway. */
+function tradeIdeas(myIds, weeks, myBase, myShape) {
+  var ideas = [];
+  if (!LEAGUE || !LEAGUE.teams) return ideas;
+  /* Handed in rather than recomputed: renderTrade already has it for the table above,
+     and squadShape is the second most expensive thing on this tab. */
+  var myNeed = {}, s;
+  for (s = 0; s < myShape.length; s++) myNeed[myShape[s].position] = myShape[s].gain;
+  var myDepth = rosterDepth(myIds, weeks);
+
+  /* PASS ONE — cheap. Build every plausible pair across the league using raw points
+     only. No optimiser runs at all here, which is the whole point: the exact
+     measurement costs 36 optimiser runs per pair, so it must be spent on a couple of
+     dozen candidates rather than on every combination in a ten-team league. */
+  var pairs = [], t, g, k;
+  for (t = 0; t < LEAGUE.teams.length; t++) {
+    if (state.leagueTeam !== undefined && t === state.leagueTeam) continue;
+    var theirIds = (LEAGUE.teams[t].players) || [];
+    if (!theirIds.length) continue;
+    var theirDepth = rosterDepth(theirIds, weeks);
+    var theirNeed = cheapNeed(theirDepth, weeks);
+    var giveables = shortlist(myIds, theirNeed, weeks);
+    var gettables = shortlist(theirIds, myNeed, weeks);
+    for (g = 0; g < giveables.length; g++) {
+      for (k = 0; k < gettables.length; k++) {
+        var mine = giveables[g], yours = gettables[k];
+        var big = Math.max(mine.raw, yours.raw) || 1;
+        if (Math.abs(mine.raw - yours.raw) / big > TRADE_VALUE_BAND) continue;
+        /* Estimated NET benefit to each side: what the incoming man clears the body
+           he displaces, minus what the outgoing man was contributing over his own
+           replacement. Netting matters — scoring the gain alone ranked "give up your
+           RB1 for their WR2" at the top of the queue, burned the whole exact budget
+           on swaps like it, and returned nothing. An estimate ONLY: it decides the
+           order of the queue, never what is reported. */
+        var forMe = Math.max(0, yours.raw - replacementRaw(myDepth, yours.player.position))
+                  - Math.max(0, mine.raw - replacementRaw(myDepth, mine.player.position));
+        var forThem = Math.max(0, mine.raw - replacementRaw(theirDepth, mine.player.position))
+                    - Math.max(0, yours.raw - replacementRaw(theirDepth, yours.player.position));
+        if (forMe <= 0 || forThem <= 0) continue;
+        pairs.push({ team: LEAGUE.teams[t].name, ids: theirIds,
+                     send: mine.id, get: yours.id,
+                     score: Math.min(forMe, forThem) });
+      }
+    }
+  }
+  pairs.sort(function (a, b) { return b.score - a.score; });
+
+  /* PASS TWO — exact, and strictly budgeted. Everything reported comes from here:
+     both lineups re-optimised week by week, before and after. */
+  var baseCache = {}, perTeam = {}, graded_count = 0;
+  for (var i = 0; i < pairs.length && graded_count < TRADE_GRADE_BUDGET; i++) {
+    var pair = pairs[i];
+    if ((perTeam[pair.team] || 0) >= TRADE_PER_TEAM) continue;
+    if (baseCache[pair.team] === undefined) {
+      baseCache[pair.team] = squadTotal(pair.ids, weeks);
+    }
+    graded_count++;
+    var verdict = gradeTrade(myIds, pair.ids, [pair.send], [pair.get],
+                             weeks, myBase, baseCache[pair.team]);
+    if (verdict.mine > TRADE_MIN_GAIN && verdict.theirs > TRADE_MIN_GAIN) {
+      perTeam[pair.team] = (perTeam[pair.team] || 0) + 1;
+      ideas.push({ team: pair.team, send: pair.send, get: pair.get,
+                   mine: verdict.mine, theirs: verdict.theirs });
+    }
+  }
+  ideas.sort(function (a, b) { return b.mine - a.mine; });
+  return ideas.slice(0, 8);
+}
+
+/* Raw rest-of-season totals per position, best first. The cheap view of a roster:
+   no optimiser, one pass, and enough to rank candidates before the exact pass. */
+function rosterDepth(ids, weeks) {
+  var depth = {};
+  for (var i = 0; i < ids.length; i++) {
+    var p = BY_ID[ids[i]];
+    if (!p) continue;
+    (depth[p.position] = depth[p.position] || []).push(rawOverWeeks(p, weeks));
+  }
+  for (var key in depth) {
+    if (Object.prototype.hasOwnProperty.call(depth, key)) {
+      depth[key].sort(function (a, b) { return b - a; });
+    }
+  }
+  return depth;
+}
+
+/* What the next man in at this position is worth — the bar an incoming player has
+   to clear before he changes anything. One past the slot count, because that is the
+   first body who is NOT already starting. */
+function replacementRaw(depth, position) {
+  var list = depth[position] || [];
+  var starters = state.slots[position] || 0;
+  /* Flex means more of this position starts than its own slot count implies, so the
+     first non-starter sits further down the list and the bar an incoming player must
+     clear is lower. Counted generously — flex is shared between RB, WR and TE, and
+     charging the whole flex to each of them errs toward letting candidates through.
+     That is the right direction for a prefilter: a false positive costs a slice of
+     the grading budget, a false negative loses a real trade. Ignoring flex entirely
+     is what dropped two genuine ideas the exact pass had confirmed. */
+  if (FLEX_OK[position]) starters += state.slots.FLEX || 0;
+  if (SUPERFLEX_OK[position]) starters += state.slots.SUPERFLEX || 0;
+  return list[starters] !== undefined ? list[starters]
+       : list.length ? list[list.length - 1] : 0;
+}
+
+/* A cheap stand-in for squadShape, used only to decide who is worth grading. It asks
+   the same question — would a middling starter here beat what they have? — with raw
+   points instead of the optimiser, because running the exact version for all nine
+   opponents cost 2.6 seconds and every one of its answers was then re-checked exactly
+   anyway. */
+function cheapNeed(depth, weeks) {
+  var need = {};
+  for (var i = 0; i < TRADE_POSITIONS.length; i++) {
+    var position = TRADE_POSITIONS[i];
+    if (!slotsAllow(position)) continue;
+    var probe = positionProbe(position, weeks);
+    if (!probe) continue;
+    var gap = rawOverWeeks(probe, weeks) - replacementRaw(depth, position);
+    need[position] = gap > 0 ? gap : 0;
+  }
+  return need;
+}
+
+/* The players on a squad most worth offering to a team with these needs. */
+function shortlist(ids, need, weeks) {
+  var out = [];
+  for (var i = 0; i < ids.length; i++) {
+    var p = BY_ID[ids[i]];
+    if (!p || !need[p.position] || need[p.position] <= TRADE_MIN_GAIN) continue;
+    out.push({ id: ids[i], raw: rawOverWeeks(p, weeks), player: p });
+  }
+  out.sort(function (a, b) { return b.raw - a.raw; });
+  return out.slice(0, TRADE_PAIR_LIMIT);
+}
+
+function pickList(ids, side, weeks) {
+  if (!ids || !ids.length) {
+    return '<div class="empty">Nobody to pick from.</div>';
+  }
+  var rows = [];
+  for (var i = 0; i < ids.length; i++) {
+    var p = BY_ID[ids[i]];
+    if (!p) continue;
+    rows.push({ p: p, raw: rawOverWeeks(p, weeks) });
+  }
+  rows.sort(function (a, b) { return b.raw - a.raw; });
+  var html = '';
+  for (var r = 0; r < rows.length; r++) {
+    var player = rows[r].p;
+    var on = side === 'out' ? tradeState.out[player.gsis_id]
+                            : tradeState.into[player.gsis_id];
+    html += '<label><input type="checkbox" data-tradeside="' + side + '" '
+      + 'data-tradeid="' + esc(player.gsis_id) + '"' + (on ? ' checked' : '') + '>'
+      + chip(player.position) + esc(player.name)
+      + '<span class="val">' + rows[r].raw.toFixed(0) + '</span></label>';
+  }
+  return html;
+}
+
+function selectedIds(map) {
+  var out = [];
+  for (var id in map) {
+    if (Object.prototype.hasOwnProperty.call(map, id) && map[id]) out.push(id);
+  }
+  return out;
+}
+
+function partnerIds() {
+  if (tradeState.partner === null || !LEAGUE || !LEAGUE.teams) return null;
+  var team = LEAGUE.teams[tradeState.partner];
+  return team ? (team.players || []) : null;
+}
+
+function renderTradeVerdict() {
+  var host = document.getElementById('tradeVerdict');
+  var note = document.getElementById('tradeVerdictNote');
+  var sending = selectedIds(tradeState.out), receiving = selectedIds(tradeState.into);
+  if (!sending.length && !receiving.length) {
+    host.innerHTML = '<div class="empty">Tick players on both sides to grade a swap.</div>';
+    note.textContent = '';
+    return;
+  }
+  var weeks = remainingWeeks(), myIds = state.roster;
+  var theirIds = partnerIds();
+  var myBase = squadTotal(myIds, weeks);
+  var theirBase = theirIds ? squadTotal(theirIds, weeks) : 0;
+  var graded = gradeTrade(myIds, theirIds, sending, receiving, weeks, myBase, theirBase);
+
+  var html = '<div class="verdictrow"><span class="who">Your lineup</span>'
+    + '<span class="delta ' + (graded.mine >= 0 ? 'up' : 'down') + '">'
+    + (graded.mine >= 0 ? '+' : '') + graded.mine.toFixed(1) + '</span>'
+    + '<span class="who" style="min-width:0">points over ' + weeks.length
+    + ' remaining weeks</span></div>';
+  if (graded.theirs !== null) {
+    var partner = LEAGUE.teams[tradeState.partner];
+    html += '<div class="verdictrow"><span class="who">'
+      + esc(partner.name) + '</span><span class="delta '
+      + (graded.theirs >= 0 ? 'up' : 'down') + '">'
+      + (graded.theirs >= 0 ? '+' : '') + graded.theirs.toFixed(1) + '</span>'
+      + '<span class="who" style="min-width:0">what it does for them</span></div>';
+  }
+  host.innerHTML = html;
+
+  var lines = [];
+  if (graded.mine > TRADE_MIN_GAIN) {
+    lines.push('This improves your starting lineup by <b>' + graded.mine.toFixed(1)
+      + '</b> points across the rest of the season.');
+  } else if (graded.mine < -TRADE_MIN_GAIN) {
+    lines.push('This <b>costs</b> you ' + Math.abs(graded.mine).toFixed(1)
+      + ' lineup points. Whatever the names look like, your starters get worse.');
+  } else {
+    lines.push('This is worth almost nothing to you either way — under a point '
+      + 'across the whole rest of the season.');
+  }
+  if (graded.theirs === null) {
+    lines.push('The other side cannot be graded without a league import, so this is '
+      + 'one half of the picture. Import your league on the Roster tab and the same '
+      + 'swap gets scored against their real roster.');
+  } else if (graded.theirs < 0 && graded.mine > 0) {
+    lines.push('It makes their lineup <b>worse</b> by '
+      + Math.abs(graded.theirs).toFixed(1) + ', so expect it to be declined. A trade '
+      + 'that only works for one side is a wish, not an offer.');
+  } else if (graded.theirs > 0 && graded.mine > 0) {
+    lines.push('It also helps them, by ' + graded.theirs.toFixed(1)
+      + ' — which is exactly why it might get accepted. Both sides can gain when each '
+      + 'is deep where the other is thin; points are not being created, they are being '
+      + 'moved from benches into lineups.');
+  }
+  lines.push('Both figures are lineup points, not raw points: every week is re-optimised '
+    + 'under your slots and your scoring, before and after. That is why a big name can '
+    + 'grade at nothing — if he would sit behind someone you already start, he adds '
+    + 'nothing to start.');
+  note.innerHTML = lines.join(' ');
+}
+
+function renderTrade() {
+  var shape = document.getElementById('tradeShape');
+  var shapeNote = document.getElementById('tradeShapeNote');
+  var ideasHost = document.getElementById('tradeIdeas');
+  var ideasNote = document.getElementById('tradeIdeasNote');
+  var picker = document.getElementById('tradepartner');
+
+  if (!state.roster.length) {
+    shape.innerHTML = '<div class="empty">Add your roster first — on the Roster tab, '
+      + 'or by importing your league. Trades are judged against the lineup you '
+      + 'actually start, so there is nothing to measure until there is one.</div>';
+    shapeNote.textContent = '';
+    picker.innerHTML = '';
+    document.getElementById('tradeMine').innerHTML = '';
+    document.getElementById('tradeTheirs').innerHTML = '';
+    document.getElementById('tradeVerdict').innerHTML = '';
+    document.getElementById('tradeVerdictNote').textContent = '';
+    ideasHost.innerHTML = '';
+    ideasNote.textContent = '';
+    return;
+  }
+
+  var weeks = remainingWeeks(), myIds = state.roster;
+  var myBase = squadTotal(myIds, weeks);
+  var shapeRows = squadShape(myIds, weeks, myBase);
+
+  var html = '<table><thead><tr><th class="l">Position</th><th>You roster</th>'
+    + '<th>A middling starter would add</th><th class="l">Read</th>'
+    + '</tr></thead><tbody>';
+  for (var i = 0; i < shapeRows.length; i++) {
+    var row = shapeRows[i];
+    var verdict = row.gain > 8 ? '<span class="tag bad">thin</span>'
+      : row.gain > TRADE_MIN_GAIN ? '<span class="tag warn">could upgrade</span>'
+      : '<span class="tag good">set</span>';
+    html += '<tr><td class="l">' + chip(row.position) + row.position + '</td>'
+      + '<td>' + row.owned + '</td>'
+      + '<td><b>' + (row.gain > 0.05 ? '+' + row.gain.toFixed(1) : '—') + '</b></td>'
+      + '<td class="l">' + verdict + '</td></tr>';
+  }
+  shape.innerHTML = html + '</tbody></table>';
+  shapeNote.innerHTML = 'Each row asks one question: if a middling starter at this '
+    + 'position joined your roster, how many points would your <i>starting lineup</i> '
+    + 'gain over the remaining ' + weeks.length + ' weeks? A big number is a hole. A '
+    + 'zero means one more there would never crack your lineup, which is what depth '
+    + 'actually is — and why this cannot be read off a list of projections. The probe '
+    + 'is the ' + LEAGUE_SIZE + 'th-best player at the position, the same yardstick the '
+    + 'Start / Sit benchmark uses.';
+
+  /* Partner picker. Rebuilt only when the league changes shape, so a re-render
+     while you are mid-selection does not reset your choice. */
+  var options = '';
+  if (LEAGUE && LEAGUE.teams) {
+    for (var t = 0; t < LEAGUE.teams.length; t++) {
+      if (state.leagueTeam !== undefined && t === state.leagueTeam) continue;
+      if (tradeState.partner === null) tradeState.partner = t;
+      options += '<option value="' + t + '"'
+        + (t === tradeState.partner ? ' selected' : '') + '>'
+        + esc(LEAGUE.teams[t].name) + '</option>';
+    }
+  }
+  picker.innerHTML = options
+    || '<option value="">no league imported</option>';
+  picker.disabled = !options;
+
+  document.getElementById('tradeMine').innerHTML = pickList(myIds, 'out', weeks);
+  var theirIds = partnerIds();
+  document.getElementById('tradeTheirs').innerHTML = theirIds
+    ? pickList(theirIds, 'in', weeks)
+    : '<div class="empty">Import your league on the Roster tab to pick from a real '
+      + 'opponent’s roster and grade both sides.</div>';
+  renderTradeVerdict();
+
+  /* The suggestion engine. Only meaningful with a league, since it is reading
+     other people's rosters to find the overlap. */
+  if (!LEAGUE || !LEAGUE.teams) {
+    ideasHost.innerHTML = '<div class="empty">Import your league on the Roster tab. '
+      + 'Finding a trade means reading the other rosters — who is deep where you are '
+      + 'thin, and thin where you are deep — and without them there is nothing to '
+      + 'search.</div>';
+    ideasNote.textContent = '';
+    return;
+  }
+  var ideas = tradeIdeas(myIds, weeks, myBase, shapeRows);
+  if (!ideas.length) {
+    ideasHost.innerHTML = '<div class="empty">No one-for-one swap in this league '
+      + 'improves both lineups. That is a real answer rather than an empty table: it '
+      + 'means nobody is deep exactly where you are thin, so any deal you make will '
+      + 'cost somebody. Try the grader above on a specific offer.</div>';
+    ideasNote.textContent = '';
+    return;
+  }
+  var ih = '<table><thead><tr><th class="l">Ask</th><th class="l">You send</th>'
+    + '<th class="l">You get</th><th>You gain</th><th>They gain</th>'
+    + '</tr></thead><tbody>';
+  for (var k = 0; k < ideas.length; k++) {
+    var idea = ideas[k];
+    var send = BY_ID[idea.send], get = BY_ID[idea.get];
+    ih += '<tr><td class="l">' + esc(idea.team) + '</td>'
+      + '<td class="l">' + chip(send.position) + esc(send.name) + '</td>'
+      + '<td class="l">' + chip(get.position) + esc(get.name) + '</td>'
+      + '<td><b class="up">+' + idea.mine.toFixed(1) + '</b></td>'
+      + '<td class="up">+' + idea.theirs.toFixed(1) + '</td></tr>';
+  }
+  ideasHost.innerHTML = ih + '</tbody></table>';
+  ideasNote.innerHTML = 'Only swaps that improve <b>both</b> starting lineups are '
+    + 'listed, because those are the only ones with any chance of being accepted. '
+    + 'Both sides gain because each is trading from a surplus that never reaches his '
+    + 'lineup into a hole that does — no points are invented, they move off benches. '
+    + 'One-for-one only: extra pieces multiply the search enormously and are usually '
+    + 'makeweights. These are conversation openers, not valuations — the other manager '
+    + 'has his own view of his players, and it will not be this one.';
+}
+
 var DRAFT = DATA.draft || null;
 
-/* VOR in plain words, using this league's real numbers.
-   "Points above replacement" is jargon that sounds like it explains itself and does
-   not. The abstract definition never lands; the same idea with two actual players in
-   it lands immediately, so the explainer is built from the live table rather than
-   written as a static paragraph. */
-function vorExplainer(size, teams) {
-  var qb = size.cliffs.QB, rb = size.cliffs.RB;
-  if (!qb || !rb) {
-    return 'VOR is how many points a player scores above the best free replacement '
-      + 'at his own position.';
+var HIST = (DATA.facts && DATA.facts.draft_history) || null;
+
+function pct(value) { return (value * 100).toFixed(1) + '%'; }
+
+/* The strategy ranking, from the historical backtest.
+
+   This used to report what each strategy COSTS against best-available, because the
+   simulation it came from drafted with our projections and graded with those same
+   projections — under which every named strategy is a constraint on the grader and
+   none can possibly win. That framing was correct for that simulation and it read as
+   evasive, because a drafter wants to know what to DO.
+
+   The backtest behind this table is not circular: the board is real consensus ADP from
+   real drafts, and the grade is what actually happened that season. A constraint CAN
+   beat best-available here, so a rank is a real answer. See history.py. */
+function renderDraftPlan(slot, teams, plan, size) {
+  var host = document.getElementById('draftPlan');
+  if (!HIST) {
+    host.innerHTML = '<div class="empty">No draft backtest in this build — run '
+      + 'history.py --generate.</div>';
+    return;
   }
-  return '<b>What VOR means.</b> In a ' + teams + '-team league every manager will '
-    + 'start ' + qb.starters + ' quarterback' + (qb.starters === 1 ? '' : 's') + ', so '
-    + 'about ' + qb.starters + ' get drafted and the next one is free on waivers. '
-    + 'VOR asks the only question that matters on draft day: <i>how many points does '
-    + 'this player score above that free guy?</i>'
-    + '<br><br>The best QB is worth ' + qb.top.toFixed(0) + ' points more than the '
-    + 'free QB. The best RB is worth ' + rb.top.toFixed(0) + ' more than the free RB. '
-    + (rb.top > qb.top
-        ? 'So even if the quarterback outscores the running back on the season, the '
-          + 'running back wins you more games — because you can replace the quarterback '
-          + 'for nothing and you cannot replace the back.'
-        : 'That is why the quarterback goes first here even though more running backs '
-          + 'come off the board early.')
-    + '<br><br><b>What a cliff is.</b> The drop column is how many points you lose by '
-    + 'waiting one more pick at that position. A big drop means the good ones are '
-    + 'about to run out — draft ahead of it. A small drop means wait; someone just as '
-    + 'good will still be there.';
+  var overall = HIST.overall || [];
+  var seatRows = (HIST.slots && HIST.slots[slot]) || [];
+  var seatBy = {};
+  for (var i = 0; i < seatRows.length; i++) seatBy[seatRows[i].strategy] = seatRows[i];
+  var pairBy = {};
+  for (var p = 0; p < (HIST.paired || []).length; p++) {
+    pairBy[HIST.paired[p].strategy] = HIST.paired[p];
+  }
+
+  var html = '<table><thead><tr><th>#</th><th class="l">Strategy</th>'
+    + '<th>Titles</th><th>Avg finish</th><th>From pick ' + slot + '</th>'
+    + '<th class="l">Against just taking the best player</th></tr></thead><tbody>';
+  for (var r = 0; r < overall.length; r++) {
+    var row = overall[r];
+    var control = row.strategy === 'best available';
+    var pair = pairBy[row.strategy];
+    var seat = seatBy[row.strategy];
+    var verdict;
+    if (control) {
+      verdict = '<span class="tag">the benchmark</span>';
+    } else if (!pair) {
+      verdict = '<span class="slot">—</span>';
+    } else if (pair.verdict === 'better') {
+      verdict = '<span class="tag good">better</span>';
+    } else if (pair.verdict === 'worse') {
+      verdict = '<span class="tag bad">worse</span>';
+    } else {
+      verdict = '<span class="slot">too close to call</span>';
+    }
+    html += '<tr' + (control ? ' class="nb"' : '') + '><td>' + row.rank + '</td>'
+      + '<td class="l"><b>' + esc(row.strategy) + '</b><br>'
+      + '<span class="slot">' + esc(row.label || '') + '</span></td>'
+      + '<td>' + pct(row.title_rate) + '</td>'
+      + '<td>' + row.avg_finish.toFixed(2) + '</td>'
+      + '<td>' + (seat ? pct(seat.title_rate) : '—') + '</td>'
+      + '<td class="l">' + verdict + '</td></tr>';
+  }
+  html += '</tbody></table>';
+
+  var span = (HIST.seasons || [0, 0]).join('–');
+  var drafts = 0, boards = HIST.boards || {}, key;
+  for (key in boards) {
+    if (boards.hasOwnProperty(key)) drafts += (boards[key].drafts || 0);
+  }
+  /* The per-seat baseline is NOT 8.3% and must be stated, or the column reads as a
+     verdict on the seat. Pooled across seats the control is exactly 8.33% by
+     construction, but any single seat rests on roughly seven seasons times the
+     simulation count — a few hundred leagues — so seats scatter from 5.7% to 10.9%
+     purely on sampling. Comparing a strategy's seat number against 8.3% would call
+     pick 1 cursed and pick 4 blessed, and neither is a finding. */
+  var seatControl = seatBy['best available'];
+
+  host.innerHTML = html
+    + '<div class="note"><b>How to read this.</b> Twelve teams draft the real '
+      + 'consensus board from ' + span + '; eleven of them just take the best player '
+      + 'left, and one commits to the strategy. Then the season is played out on what '
+      + '<i>actually happened</i>. <b>Titles</b> is how often that seat finished first '
+      + 'of twelve. A seat with no edge at all wins '
+      + pct(HIST.baseline_title || 0.0833) + ' of the time and averages a '
+      + ((HIST.teams + 1) / 2).toFixed(1) + ' finish — that is the number every row '
+      + 'has to beat, and it is why <b>best available</b> lands exactly there. It '
+      + 'drafts the way the other eleven do, so it is the control, not a '
+      + 'recommendation.</div>'
+    + '<div class="note"><b>The honest headline: almost nothing here is '
+      + 'distinguishable.</b> The last column compares each rule against the benchmark '
+      + 'on the <i>same</i> drafts, and puts the error bar across seasons rather than '
+      + 'across simulations — because a season is the thing that independently varies, '
+      + 'so this rests on seven of them, not on thousands of rooms. Under that bar only '
+      + '<b>WR-first</b> separates from the benchmark, and it separates by being worse. '
+      + 'Everything else is a coin flip dressed as a philosophy. Rank order is still '
+      + 'shown because you asked where each stands, but treat the top of the table as a '
+      + 'group, not a winner.</div>'
+    + '<div class="note"><b>Careful with the “from pick ' + slot + '” column.</b> '
+      + 'That is one seat on its own, so it rests on a few hundred leagues rather than '
+      + 'the full set, and seats scatter widely on sampling alone. '
+      + (seatControl ? 'From this seat the benchmark itself titles '
+          + pct(seatControl.title_rate) + ', not '
+          + pct(HIST.baseline_title || 0.0833) + ' — so compare each row against '
+          + pct(seatControl.title_rate) + '. ' : '')
+      + 'Across all twelve seats the benchmark averages exactly '
+      + pct(HIST.baseline_title || 0.0833) + '; the seat-to-seat differences in '
+      + 'between are noise, not a verdict on your draft position.</div>'
+    + '<div class="note">Built from ' + drafts.toLocaleString() + ' real PPR drafts '
+      + 'aggregated by Fantasy Football Calculator, scored on nflverse results. '
+      + (teams === '12' || teams === 12 ? ''
+          : '<b>Measured in 12-team leagues</b> — you have ' + teams + ' selected, so '
+            + 'read it as the direction rather than the exact rate. ')
+      + 'Rosters are draft-only: no waivers, no trades, no injury replacements. That '
+      + 'understates <b>zero-RB</b> most, since its real case rests on hitting on '
+      + 'waiver backs — its number here is a floor.</div>'
+    + '<div class="note">' + esc((size.notes && size.notes[plan.group]) || '') + '</div>';
+}
+
+/* What the teams that actually won were built like — strategy-free, straight from
+   outcomes. This is the question people actually ask ("what did winners have?"), and
+   it is answerable without reference to any named philosophy. */
+function renderWinners() {
+  var host = document.getElementById('draftWinners');
+  var note = document.getElementById('draftWinnersNote');
+  if (!HIST || !HIST.winners) { host.innerHTML = ''; note.innerHTML = ''; return; }
+  var w = HIST.winners;
+
+  function table(title, rows, rare) {
+    var out = '<table><thead><tr><th class="l">' + title + '</th><th>Rosters</th>'
+      + '<th>Titles</th><th>Avg finish</th></tr></thead><tbody>';
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i], parts = row.build.split('-'), label = '';
+      for (var c = 0; c < parts.length; c++) label += chip(parts[c]);
+      out += '<tr><td class="l">' + label + '</td><td>' + row.n.toLocaleString()
+        + '</td><td><b>' + pct(row.title_rate) + '</b></td><td>'
+        + row.avg_finish.toFixed(2) + '</td></tr>';
+    }
+    out += '</tbody></table>';
+    if (rare && rare.length) {
+      var names = [];
+      for (var k = 0; k < rare.length; k++) {
+        names.push(rare[k].build + ' (' + rare[k].n + ')');
+      }
+      out += '<div class="note">Too rare to score, under ' + w.min_n + ' rosters: '
+        + esc(names.join(', ')) + '. The board almost never offers these, which is '
+        + 'itself the finding — a rate built on twenty rosters is one team either '
+        + 'way.</div>';
+    }
+    return out;
+  }
+
+  host.innerHTML = table('First pick', w.round1 || [], w.round1_rare)
+    + table('First two picks', w.first_two || [], w.first_two_rare);
+
+  var one = (w.round1 || [])[0];
+  note.innerHTML = '<b>Every seat drafts the consensus board here</b> — no strategy is '
+    + 'imposed. Each roster is simply labelled by what it took early and by where it '
+    + 'finished, so this is what winning teams looked like rather than what a rule '
+    + 'predicts.'
+    + (one ? ' Teams that opened with a ' + esc(one.build) + ' titled '
+        + pct(one.title_rate) + ' of the time against a ' + pct(HIST.baseline_title)
+        + ' baseline.' : '')
+    + '<br><br><b>The running back result is the one worth acting on</b>, and it is '
+    + 'small: opening RB beats opening WR, and the weakest common build is taking '
+    + 'receivers with both of your first two picks. That agrees with the scarcity '
+    + 'table below — backs are worth more <i>over replacement</i> even though '
+    + 'receivers score more raw points — and it is the same direction the strategy '
+    + 'ranking found. Two independent cuts of the data agreeing is the strongest claim '
+    + 'on this tab, and it is still worth well under one finishing place.';
+}
+
+/* The three arguments this tab exists to settle, each as a straight head-to-head. */
+function renderDuels() {
+  var host = document.getElementById('draftDuels');
+  var note = document.getElementById('draftDuelsNote');
+  if (!HIST || !HIST.duels) { host.innerHTML = ''; note.innerHTML = ''; return; }
+  var pairBy = {};
+  for (var p = 0; p < (HIST.paired || []).length; p++) {
+    pairBy[HIST.paired[p].strategy] = HIST.paired[p];
+  }
+  /* Columns show AVERAGE FINISH, because that is the metric that decides the duel.
+     Showing title rate here instead printed a flat contradiction: early-QB "came out
+     ahead" of late-QB on finish (6.60 to 6.68) while the title column beside it read
+     7.1% against 8.0%. Both facts are true and the pair is meaningless — the two are a
+     tie — but a table that names a winner and then shows him losing the visible number
+     destroys trust in every other row on the page. */
+  var html = '<table><thead><tr><th class="l">The argument</th>'
+    + '<th class="l">Verdict</th><th class="l">Better average finish</th>'
+    + '<th class="l">The other rule</th>'
+    + '<th class="l">Is the gap real?</th></tr></thead><tbody>';
+  for (var i = 0; i < HIST.duels.length; i++) {
+    var d = HIST.duels[i];
+    var wp = pairBy[d.winner], lp = pairBy[d.loser];
+    /* A duel is only meaningful if at least one side separated from the benchmark.
+       Two rules that are both indistinguishable from just taking the best player are
+       also indistinguishable from each other, and printing a winner there would be
+       inventing a result out of a 0.05 gap. */
+    var real = (wp && wp.verdict !== 'no different')
+      || (lp && lp.verdict !== 'no different');
+    html += '<tr><td class="l"><b>' + esc(d.question) + '</b></td>'
+      + '<td class="l">' + (real
+          ? '<b>' + esc(d.winner) + '</b>'
+          : '<span class="tag warn">tie</span>') + '</td>'
+      + '<td class="l">' + esc(d.winner) + ' ' + d.winner_finish.toFixed(2) + '</td>'
+      + '<td class="l">' + esc(d.loser) + ' ' + d.loser_finish.toFixed(2) + '</td>'
+      + '<td class="l">' + (real
+          ? '<span class="tag good">yes — ' + d.margin.toFixed(2) + ' of a place</span>'
+          : '<span class="tag warn">no, ' + d.margin.toFixed(2)
+            + ' of a place — noise</span>') + '</td></tr>';
+  }
+  host.innerHTML = html + '</tbody></table>';
+  note.innerHTML = '<b>Read the last column first.</b> Only the running-back argument '
+    + 'produced a gap big enough to separate from chance. The quarterback and tight '
+    + 'end arguments came out as ties: paying up for a quarterback and streaming one '
+    + 'finished within a tenth of a place of each other, and so did the elite tight '
+    + 'end against punting the position. On a tie the two middle columns can even '
+    + 'disagree about which side looks better depending on whether you read average '
+    + 'finish or titles — which is exactly what a tie looks like, and why no winner is '
+    + 'named.'
+    + '<br><br>That is a genuinely useful answer even though it names no winner. It '
+    + 'means <b>the quarterback and tight end decisions are not where your draft is '
+    + 'won or lost</b> — take whichever you prefer and spend your attention on the '
+    + 'picks that do move the needle. It also means the confident advice you will read '
+    + 'elsewhere about waiting on a quarterback is, on seven seasons of real boards and '
+    + 'real results, not measurable.';
+}
+
+/* Positional scarcity in plain words, using this league's real numbers.
+
+   "Value over replacement" is jargon that sounds self-explanatory and is not, and the
+   cliff columns were worse: "Draft ahead of" gave a player number with no statement of
+   what to do with it. The abstract definition never lands, so the whole explainer is
+   built from the live table with actual positions and actual point gaps in it. */
+function renderCliffs(size, teams) {
+  var order = ['QB', 'RB', 'WR', 'TE'];
+  var cliffs = '<table><thead><tr><th class="l">Pos</th>'
+    + '<th>Starters drafted</th><th>Best is worth</th><th>Last starter worth</th>'
+    + '<th>Biggest single drop</th><th class="l">So: act before…</th>'
+    + '</tr></thead><tbody>';
+  for (var c = 0; c < order.length; c++) {
+    var info = size.cliffs[order[c]];
+    if (!info) continue;
+    /* The cliff is the biggest gap between one player and the next inside the
+       startable range. Naming the pick AFTER the drop is what makes it actionable:
+       that is the first player who is materially worse than the one above him. */
+    var at = info.after;
+    cliffs += '<tr><td class="l">' + chip(order[c]) + '</td>'
+      + '<td>' + info.starters + '</td>'
+      + '<td>' + info.top.toFixed(0) + '</td>'
+      + '<td>' + (info.last === undefined ? '—' : info.last.toFixed(0)) + '</td>'
+      + '<td><b>' + info.cliff.toFixed(0) + '</b> pts<br>'
+      + '<span class="slot">between ' + order[c] + at + ' and ' + order[c] + (at + 1)
+      + '</span></td>'
+      + '<td class="l">' + order[c] + (at + 1) + ' comes off the board<br>'
+      + '<span class="slot">wait past ' + order[c] + at + ' and you give up about '
+      + info.cliff.toFixed(0) + ' points</span></td></tr>';
+  }
+  document.getElementById('draftCliffs').innerHTML = cliffs + '</tbody></table>';
+
+  var qb = size.cliffs.QB, rb = size.cliffs.RB, te = size.cliffs.TE;
+  var intro = '<b>Why this table exists.</b> Points do not mean the same thing at '
+    + 'every position. A quarterback who scores 300 is not twice as useful as a '
+    + 'running back who scores 150, because <i>everybody</i> fields a quarterback — '
+    + 'so what a pick is really worth is the gap to the player you could have had for '
+    + 'nothing. That gap is what every number below measures.';
+  if (qb && rb) {
+    intro += '<br><br><b>Worked through, in your league.</b> With ' + teams
+      + ' teams, about ' + qb.starters + ' quarterback'
+      + (qb.starters === 1 ? '' : 's') + ' and ' + rb.starters + ' running backs get '
+      + 'drafted as starters. The next one at each position is free on waivers. The '
+      + 'best QB beats that free quarterback by ' + qb.top.toFixed(0) + ' points; the '
+      + 'best RB beats the free running back by ' + rb.top.toFixed(0) + '. '
+      + (rb.top > qb.top
+          ? 'So the running back is the more valuable pick even if the quarterback '
+            + 'outscores him outright — you can replace the quarterback for nothing '
+            + 'and you cannot replace the back.'
+          : 'So the quarterback is the more valuable pick here, which is unusual and '
+            + 'worth a second look at the board.');
+  }
+  document.getElementById('vorIntro').innerHTML = intro;
+
+  var note = '<b>Column by column.</b>'
+    + '<br><b>Starters drafted</b> — how many of that position your league starts in '
+    + 'total. Everyone past this number is essentially free.'
+    + '<br><b>Best is worth</b> / <b>Last starter worth</b> — points above that free '
+    + 'replacement, for the top player at the position and for the last one who still '
+    + 'starts somewhere. The distance between these two is how much the position '
+    + 'rewards getting in early.'
+    + '<br><b>Biggest single drop</b> — the largest gap between one player and the '
+    + 'next inside the startable range. This is the cliff: the point where the '
+    + 'position stops being interchangeable.'
+    + '<br><b>So: act before…</b> — the pick that falls off the cliff. Everyone above '
+    + 'him is worth roughly the same; he is the first who is not. Take the position '
+    + 'while the players above the cliff are still there, or accept the drop.'
+    + '<br><br><b>How to actually use it.</b> A big drop early means the good ones run '
+    + 'out fast and you should get ahead of the run. A small drop means wait — someone '
+    + 'about as good will still be sitting there two rounds later, and the pick is '
+    + 'better spent on a position where the cliff is steep.'
+    + '<br><br><b>One caution.</b> This is scarcity on <i>this season’s '
+    + 'projections</i>, so it says where the board thins out, not who will actually '
+    + 'score. The backtest above is the one graded against real results, and it found '
+    + 'these edges are small in practice.';
+  document.getElementById('vorNote').innerHTML = note;
 }
 
 function renderDraft() {
@@ -3247,50 +4663,10 @@ function renderDraft() {
   var plan = size.slots[slot];
   if (!plan) return;
 
-  // Named strategies are CONSTRAINTS on taking the best available value, so none of
-  // them can beat it and there is no "winning" strategy to crown. What varies, and what
-  // a drafter can act on, is how much each commitment costs from their particular seat.
-  var list = plan.strategies || [];
-  var rank = '<table><thead><tr><th class="l">Strategy</th><th>Costs you</th>'
-    + '<th class="l">From pick ' + slot + '</th></tr></thead><tbody>';
-  for (var s = 0; s < list.length; s++) {
-    var row = list[s];
-    var freeish = row.verdict === 'free' || row.verdict === 'same picks';
-    var note = row.verdict === 'same picks'
-      ? 'what best value does here anyway'
-      : row.verdict === 'free' ? 'costs nothing you can measure'
-      : row.verdict === 'slight cost' ? 'playable, slightly behind'
-      : 'meaningfully worse from this seat';
-    rank += '<tr><td class="l"><b>' + esc(row.name) + '</b></td>'
-      + '<td>' + (freeish ? '<span class="tag good">free</span>'
-                          : '&minus;' + row.cost.toFixed(0))
-      + '</td><td class="l"><span class="slot">' + note + '</span></td></tr>';
-  }
-  rank += '</tbody></table>';
-
-  document.getElementById('draftPlan').innerHTML =
-    '<p class="total">' + plan.best.toFixed(0)
-      + ' <span>season points from pick ' + slot + ' in a ' + teams
-      + '-team league, taking the best available value</span></p>'
-    + rank
-    + '<div class="note">Every strategy below is a rule that removes options, so none '
-      + 'can beat simply taking the best value on the board. The number is what '
-      + 'committing to it costs against the same opponents. Averaged over simulated '
-      + 'drafts where the room scatters around consensus ADP.</div>'
-    + '<div class="note">' + esc(size.notes[plan.group] || '') + '</div>';
-
-  var cliffs = '<table><thead><tr><th class="l">Pos</th><th>Startable</th>'
-    + '<th>Top VOR</th><th>Biggest drop</th><th class="l">Draft ahead of</th></tr></thead><tbody>';
-  var order = ['QB', 'RB', 'WR', 'TE'];
-  for (var c = 0; c < order.length; c++) {
-    var info = size.cliffs[order[c]];
-    if (!info) continue;
-    cliffs += '<tr><td class="l">' + chip(order[c]) + '</td><td>' + info.starters
-      + '</td><td>' + info.top.toFixed(0) + '</td><td><b>' + info.cliff.toFixed(0)
-      + '</b></td><td class="l">the ' + order[c] + (info.after + 1) + ' pick</td></tr>';
-  }
-  document.getElementById('draftCliffs').innerHTML = cliffs + '</tbody></table>';
-  document.getElementById('vorNote').innerHTML = vorExplainer(size, teams);
+  renderDraftPlan(slot, teams, plan, size);
+  renderWinners();
+  renderDuels();
+  renderCliffs(size, teams);
 
   var position = document.getElementById('dpos').value;
   var sort = document.getElementById('dsort').value;
@@ -3453,6 +4829,10 @@ function render() {
   renderLines();
   renderCatchingBacks();
   renderWaivers();
+  /* Only while the tab is open. This one runs the optimiser hundreds of times, and
+     paying that on every keystroke in the scoring panel would make the whole page
+     feel broken. Same reasoning as the scores tab fetching on open. */
+  if (currentView === 'trade') renderTrade();
   renderRoster();
   renderLeague();
   renderDraft();
@@ -3483,6 +4863,17 @@ document.addEventListener('click', function (event) {
     // look at them, and this is someone else's server.
     if (currentView === 'scores') renderScores(false);
     else scheduleScoreRefresh(false);
+    // Trades are computed on open for the same reason, but the cost is local: the
+    // optimiser runs hundreds of times to grade a league's worth of swaps.
+    if (currentView === 'trade') renderTrade();
+    return;
+  }
+  if (target.dataset.tradeside) {
+    /* Only the verdict is recomputed, not the whole tab: rebuilding the pick lists
+       under the cursor would scroll them back to the top on every tick. */
+    var bucket = target.dataset.tradeside === 'out' ? tradeState.out : tradeState.into;
+    bucket[target.dataset.tradeid] = target.checked;
+    renderTradeVerdict();
     return;
   }
   if (target.dataset.add) {
@@ -3493,19 +4884,47 @@ document.addEventListener('click', function (event) {
     if (at >= 0) state.roster.splice(at, 1);
     render();
   } else if (target.id === 'importleague') {
-    var id = document.getElementById('leagueid').value.replace(/^\s+|\s+$/g, '');
-    if (!id) { setStatus('Enter a league ID first.', 'warn'); return; }
+    var typed = document.getElementById('leagueid').value.replace(/^\s+|\s+$/g, '');
+    if (!typed) { setStatus('Enter a league ID first.', 'warn'); return; }
+    var id = parseLeagueId(typed);
+    if (!id) {
+      setStatus('No league ID found in that. Paste the number itself, or the whole '
+        + 'league URL and the ID will be picked out of it.', 'warn');
+      return;
+    }
     var platform = document.getElementById('platform').value;
-    setStatus('Contacting ' + platform + '…', '');
+    /* Show what was actually extracted when it differs from what was typed — the whole
+       failure this replaces was invisible, and a silent reinterpretation of the input
+       would be the same mistake in the other direction. */
+    if (id !== typed) {
+      document.getElementById('leagueid').value = id;
+      setStatus('Using league ID ' + esc(id) + ' from that URL. Contacting '
+        + platform + '…', '');
+    } else {
+      setStatus('Contacting ' + platform + '…', '');
+    }
     var handler = platform === 'sleeper' ? importSleeper : importEspn;
     handler(id, function (err, result) {
       if (err) { setStatus(err, 'bad'); return; }
       LEAGUE = result;
       state.league = result;
       state.leagueTeam = undefined;
+      /* SAY WHEN PLAYERS WENT MISSING.
+         An import that resolves 150 of 160 players looks identical to a clean one,
+         and the ten who vanished then show up as free agents on the waiver wire —
+         which is how every team defence in the league appeared to be available at
+         once. A silent partial import is worse than a failed one, because nothing
+         invites you to look. */
+      var kept = 0;
+      for (var t = 0; t < result.teams.length; t++) kept += result.teams[t].players.length;
       setStatus('Imported ' + result.teams.length + ' teams'
-        + (result.name ? ' from ' + esc(result.name) : '') + '. Pick your team below.',
-        'good');
+        + (result.name ? ' from ' + esc(result.name) : '') + ', ' + kept + ' players'
+        + (result.unresolved
+            ? '. <b>' + result.unresolved + ' could not be matched</b> to our data and '
+              + 'will wrongly appear as free agents on Waivers.'
+            : '.')
+        + ' Pick your team below.',
+        result.unresolved ? 'warn' : 'good');
       render();
     });
   } else if (target.id === 'refreshscores') {
@@ -3572,7 +4991,14 @@ var ON_CHANGE = {
   dsort:     renderDraft,
   dwhy:      renderDraft,
   roitier:   renderPositionalRoi,
-  scoreweek: function () { renderScores(true); }
+  whyplayer: renderWhy,
+  scoreweek: function () { renderScores(true); },
+  tradepartner: function (v) {
+    tradeState.partner = v === '' ? null : +v;
+    /* A new partner invalidates what was ticked on their side, never yours. */
+    tradeState.into = {};
+    renderTrade();
+  }
 };
 
 document.addEventListener('change', function (event) {
