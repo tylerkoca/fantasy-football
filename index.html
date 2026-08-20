@@ -656,6 +656,12 @@
       <div id="bench"></div>
     </div>
     <div class="card">
+      <h2>Byes ahead
+        <span class="tag">where your roster thins out</span></h2>
+      <div id="byeBoard"></div>
+      <div class="note" id="byeNote"></div>
+    </div>
+    <div class="card">
       <h2>Why this projection
         <span class="tag">exact contributions, your scoring</span></h2>
       <div class="row" id="whyPick" style="align-items:flex-end;margin-bottom:10px">
@@ -1422,6 +1428,68 @@ function flags(entry) {
   if (w.spread && w.spread >= 4) {
     out += ' <span class="tag">sources differ ' + w.spread.toFixed(1) + '</span>';
   }
+  out += watchFlags(entry.player);
+  return out;
+}
+
+/* HIS RECORD AGAINST THIS OPPONENT — printed next to his own average, deliberately.
+
+   This is the most quoted number in fantasy football and it predicts nothing. Measured
+   over 9,999 player-weeks: a player's OVERALL average predicts his next game at
+   r=0.577, his average against this specific opponent at r=0.472 — worse — and the
+   vs-opponent split adds r=0.015 on top of his overall average, which is zero. The
+   split swings 2.9 points, which is exactly why it fools people: it looks like a
+   finding.
+
+   It is shown because it is genuinely interesting and because anyone who wants it will
+   otherwise look it up somewhere that presents it as a reason to bench someone. Both
+   numbers appear together so the reader can see how far the "history" is from his
+   ordinary form, and the tooltip says outright that it is not predictive. */
+function versusCell(entry) {
+  var vs = entry.week.vs_opponent;
+  if (!vs || entry.week.is_bye) return '';
+  var games = vs[0], mean = vs[1], overall = vs[2];
+  var gap = mean - overall;
+  var title = games + ' career games against this opponent, averaging ' + mean.toFixed(1)
+    + ' against ' + overall.toFixed(1) + ' overall. Measured across 9,999 player-weeks '
+    + 'this split adds nothing to what his own average already tells you (r=0.015) — it '
+    + 'is history, not a forecast.';
+  return '<br><span class="slot" title="' + esc(title) + '">'
+    + games + ' prior: <b>' + mean.toFixed(1) + '</b> vs ' + overall.toFixed(1)
+    + ' usual <span class="' + (Math.abs(gap) < 1 ? 'slot' : gap > 0 ? 'up' : 'down')
+    + '">' + (gap >= 0 ? '+' : '') + gap.toFixed(1) + '</span></span>';
+}
+
+/* WHAT CHANGED AROUND HIM SINCE THE PROJECTION WAS BUILT.
+
+   The model reads box scores and cannot read a press conference, so it is always
+   slightly behind the news — and widest behind it in exactly the week a job changes
+   hands. The depth chart is the closest thing to a press conference that exists as
+   data, and nflverse publishes it daily.
+
+   These badges are NOT in the projection and must not be read as if they were. Measured
+   over 2024-2025, a promotion is worth +0.51 points against -0.15 for no move
+   (r=0.035, n=3,787) and a demotion measures at nothing at all. Far too small to
+   project with; large enough that you want to know a starting back was replaced. See
+   watch.py. */
+function watchFlags(player) {
+  var watch = DATA.facts && DATA.facts.watch;
+  if (!watch || !watch.alerts) return '';
+  var alert = watch.alerts[player.gsis_id];
+  if (!alert) return '';
+
+  var out = '';
+  if (alert.depth) {
+    var up = alert.depth.delta > 0;
+    out += ' <span class="tag ' + (up ? 'good' : 'warn') + '">'
+      + player.position + alert.depth.from + ' &rarr; ' + player.position
+      + alert.depth.to + '</span>';
+  }
+  if (alert.injury && alert.injury.status) {
+    out += ' <span class="tag bad">' + esc(alert.injury.status)
+      + (alert.injury.injury ? ' (' + esc(alert.injury.injury) + ')' : '')
+      + '</span>';
+  }
   return out;
 }
 
@@ -1756,11 +1824,13 @@ function playerRow(entry, options) {
     + '<td class="l who"' + teamStyle(p.team) + '>'
       + (options.lead ? '<span class="slotname">' + options.lead + '</span>' : '')
       + avatar(p) + chip(p.position) + esc(p.name) + flags(entry) + '</td>'
-    + '<td class="l">' + teamBadge(p.team) + ' <span class="slot">' + matchup + '</span></td>'
+    + '<td class="l">' + teamBadge(p.team) + ' <span class="slot">' + matchup + '</span>'
+      + versusCell(entry) + '</td>'
     + '<td class="l">' + usageCell(entry) + '</td>'
     + '<td><b>' + entry.points.toFixed(1) + '</b></td>'
     + sourceCells(entry)
     + '<td class="l">' + bandCell(entry) + '</td>'
+    + '<td class="l">' + weekReasonCell(entry) + '</td>'
     + '</tr>';
 }
 
@@ -1800,7 +1870,93 @@ function usageCell(entry) {
 var TABLE_HEAD = '<thead><tr><th class="l">Player</th><th class="l">Matchup</th>'
   + '<th class="l">Workload</th>'
   + '<th>Proj</th><th>Own</th><th>Sleeper</th><th>ESPN</th>'
-  + '<th class="l">Bust / boom odds</th></tr></thead>';
+  + '<th class="l">Bust / boom odds</th>'
+  + '<th class="l">Why this week</th></tr></thead>';
+
+/* WHY THIS WEEK — what the week itself is doing to him, in points.
+
+   The bust/boom odds beside this describe the SHAPE of his outcome distribution, which
+   is mostly a property of the player and barely moves week to week. This column answers
+   the different question a manager is actually asking on Sunday morning: is there
+   anything about THIS week — this opponent, this game, his injury status — pushing him
+   up or down, and by how much.
+
+   It is not a second opinion or a heuristic. These are the same exact Shapley
+   contributions the "Why this projection" panel breaks out, so the number here and the
+   number there are the same number, and both add up to the projection. A factor the
+   model measured at nothing contributes exactly zero and simply does not appear, which
+   is why a running back never shows weather and a receiver rarely shows a game total.
+
+   Order is by absolute size, so the biggest mover leads regardless of sign. */
+var WEEK_REASON = {
+  matchup: { up: 'soft matchup', down: 'tough matchup' },
+  environment: { up: 'shootout', down: 'low-scoring game' },
+  weather: { up: 'weather helps', down: 'wind or cold' },
+  team_change: { up: 'new team', down: 'new team' },
+  availability: { up: 'injury report', down: 'injury report' }
+};
+
+/* The metric layer costs 2^n scorings and does NOT depend on the week — only on the
+   player and the scoring config. The rankings table renders a hundred rows through
+   playerRow, so without this it would pay 25,000 scorings per keystroke in the scoring
+   panel. Cached per player and thrown away whole when the config changes, which is the
+   only thing that can invalidate it. */
+var SHAP_CACHE = {}, SHAP_SIG = null;
+
+function configSignature() {
+  var keys = Scoring.sortedKeys(state.config.per_stat), out = [];
+  for (var i = 0; i < keys.length; i++) {
+    out.push(keys[i] + ':' + state.config.per_stat[keys[i]]);
+  }
+  return out.join(',') + '|' + (state.config.bonuses || []).length;
+}
+
+function baseShap(player) {
+  if (!player.drivers || !SPEC[player.position]) return null;
+  var sig = configSignature();
+  if (sig !== SHAP_SIG) { SHAP_CACHE = {}; SHAP_SIG = sig; }
+  if (!Object.prototype.hasOwnProperty.call(SHAP_CACHE, player.gsis_id)) {
+    SHAP_CACHE[player.gsis_id] = metricShapley(player.position, player.drivers);
+  }
+  return SHAP_CACHE[player.gsis_id];
+}
+
+function weekReasonCell(entry) {
+  var w = entry.week, p = entry.player;
+  if (w.is_bye) return '<span class="tag warn">bye week</span>';
+
+  var adj = w.adjustments;
+  if (!adj) return '<span class="slot">—</span>';
+  var result = baseShap(p);
+  if (!result) return '<span class="slot">—</span>';
+
+  var base = result.average, k;
+  for (k in result.phi) if (result.phi.hasOwnProperty(k)) base += result.phi[k];
+  var phi = adjustmentShapley(base, adj);
+
+  var rows = [];
+  for (k in phi) {
+    if (phi.hasOwnProperty(k) && Math.abs(phi[k]) >= 0.05) {
+      rows.push({ name: k, v: phi[k] });
+    }
+  }
+  rows.sort(function (a, b) { return Math.abs(b.v) - Math.abs(a.v); });
+  if (!rows.length) return '<span class="slot">nothing this week</span>';
+
+  var total = 0, out = [];
+  for (var i = 0; i < rows.length; i++) total += rows[i].v;
+  for (i = 0; i < Math.min(2, rows.length); i++) {
+    var label = (WEEK_REASON[rows[i].name] || {})[rows[i].v >= 0 ? 'up' : 'down']
+      || rows[i].name;
+    out.push('<span class="' + (rows[i].v >= 0 ? 'up' : 'down') + '">'
+      + (rows[i].v >= 0 ? '+' : '') + rows[i].v.toFixed(1) + '</span> ' + esc(label));
+  }
+  var verdict = total >= 1.0 ? '<span class="tag good">boom setup</span>'
+    : total <= -1.0 ? '<span class="tag bad">tough spot</span>'
+    : '';
+  return verdict + (verdict ? '<br>' : '') + '<span class="slot">'
+    + out.join(' &middot; ') + '</span>';
+}
 
 /* What a typical starting lineup scores this week, computed rather than remembered.
    "Good teams are around 125 a week" is a real rule of thumb and a stale one: it
@@ -1973,9 +2129,10 @@ function renderStartSit() {
   if (!entries.length) {
     box.innerHTML = '<div class="empty">No players yet — add some on the Roster tab.</div>';
     benchBox.innerHTML = '';
-    // Still render the breakdown card, which has its own empty state. Returning here
-    // without it left a bare label and an empty dropdown sitting under two explained
+    // Still render the cards below, which have their own empty states. Returning here
+    // without them left bare labels and an empty dropdown sitting under two explained
     // cards — the one thing on the page that looked broken rather than unfilled.
+    renderByes();
     renderWhy();
     return;
   }
@@ -1988,7 +2145,7 @@ function renderStartSit() {
     if (!row.entry) {
       html += '<tr><td class="l"><span class="slotname">' + row.slot
         + '</span><span style="color:var(--muted)">empty</span></td>'
-        + '<td colspan="7"></td></tr>';
+        + '<td colspan="8"></td></tr>';
       continue;
     }
     html += playerRow(row.entry, { lead: row.slot, cls: 'filled' });
@@ -2017,7 +2174,140 @@ function renderStartSit() {
     for (var b = 0; b < result.bench.length; b++) bench += playerRow(result.bench[b]);
     benchBox.innerHTML = bench + '</tbody></table></div>';
   }
+  renderByes();
   renderWhy();
+}
+
+/* ---- byes ahead ----------------------------------------------------------
+
+   A bye is the one gap you can see coming weeks out and the one people plan for last.
+   The useful question is not "who is on bye in week 7" — the schedule says that — but
+   "which week does my roster actually break", and that depends on your slots, not on
+   the count. Losing three receivers in a week you start two is survivable; losing your
+   only tight end is a zero in a slot nothing else can fill.
+
+   So this scores each upcoming week the way the lineup optimiser does: fill the slots
+   from whoever is left, and report the gap against a normal week. A position is called
+   UNCOVERED when the players remaining cannot fill its dedicated slots, which is the
+   thing you have to act on in advance. */
+function byeOutlook() {
+  var entries = rosterEntries(), byes = DATA.byes || {};
+  if (!entries.length) return null;
+
+  var weeks = [], i;
+  for (i = 0; i < DATA.weeks.length; i++) {
+    if (+DATA.weeks[i] > +state.week) weeks.push(DATA.weeks[i]);
+  }
+
+  // What the roster carries at each position, ignoring byes entirely. A position the
+  // roster has NONE of is a standing gap, not something a bye did — reporting "no DST"
+  // every week because the user never drafted one buries the weeks that actually break.
+  var carried = {};
+  for (var r0 = 0; r0 < state.roster.length; r0++) {
+    var owned = BY_ID[state.roster[r0]];
+    if (owned) carried[owned.position] = (carried[owned.position] || 0) + 1;
+  }
+
+  var out = [], clean = [];
+  for (i = 0; i < weeks.length; i++) {
+    var week = String(weeks[i]), affected = [], have = {}, pool = [];
+    for (var r = 0; r < state.roster.length; r++) {
+      var player = BY_ID[state.roster[r]];
+      if (!player) continue;
+      if (String(byes[player.team]) === week) { affected.push(player); continue; }
+      var e = entryFor(player, week);
+      if (e) pool.push(e);
+      have[player.position] = (have[player.position] || 0) + 1;
+    }
+    var best = pool.length ? optimize(pool) : { total: 0 };
+    var total = best.total || 0;
+    if (!affected.length) { clean.push(total); continue; }
+
+    // Only positions the bye actually broke: carried enough before, short now.
+    var uncovered = [];
+    for (var slot in state.slots) {
+      if (!state.slots.hasOwnProperty(slot) || slot === 'FLEX' || !state.slots[slot]) {
+        continue;
+      }
+      if ((carried[slot] || 0) >= state.slots[slot]
+          && (have[slot] || 0) < state.slots[slot]) {
+        uncovered.push(slot);
+      }
+    }
+    out.push({ week: week, affected: affected, uncovered: uncovered, total: total });
+  }
+
+  // Baseline is a NORMAL week for this roster, not the best bye week. Taking the best
+  // bye week made the worst-affected week look free whenever every week had a bye.
+  clean.sort(function (a, b) { return a - b; });
+  var baseline = clean.length ? clean[Math.floor(clean.length / 2)] : 0;
+  for (i = 0; i < out.length; i++) out[i].baseline = baseline;
+  return out;
+}
+
+function renderByes() {
+  var host = document.getElementById('byeBoard');
+  var note = document.getElementById('byeNote');
+  var rows = byeOutlook();
+  if (!rows) {
+    host.innerHTML = '<div class="empty">Add players on the Roster tab.</div>';
+    note.innerHTML = '';
+    return;
+  }
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">No byes left for anyone on this roster.</div>';
+    note.innerHTML = '';
+    return;
+  }
+
+  var i, baseline = rows[0].baseline;
+
+  var html = '<table><thead><tr><th>Week</th><th class="l">On bye</th>'
+    + '<th>Lineup</th><th>Cost</th><th class="l">Verdict</th></tr></thead><tbody>';
+  for (i = 0; i < rows.length; i++) {
+    var row = rows[i], who = [];
+    for (var a = 0; a < row.affected.length; a++) {
+      who.push(chip(row.affected[a].position) + esc(row.affected[a].name));
+    }
+    var gap = baseline ? row.total - baseline : 0;
+    var verdict;
+    if (row.uncovered.length) {
+      verdict = '<span class="tag bad">' + row.uncovered.join(' / ')
+        + ' slot unfilled</span> <span class="slot">nothing on your bench covers it — '
+        + 'add one before this week</span>';
+    } else if (gap <= -12) {
+      verdict = '<span class="tag warn">covered, but costly</span>'
+        + ' <span class="slot">every slot fills, from a much weaker bench</span>';
+    } else {
+      verdict = '<span class="slot">covered from the bench</span>';
+    }
+    html += '<tr><td><b>' + row.week + '</b></td>'
+      + '<td class="l">' + who.join(' ') + '</td>'
+      + '<td>' + row.total.toFixed(1) + '</td>'
+      + '<td>' + (gap < -0.05
+          ? '<b class="down">' + gap.toFixed(1) + '</b>' : '<span class="slot">—</span>')
+      + '</td><td class="l">' + verdict + '</td></tr>';
+  }
+  host.innerHTML = html + '</tbody></table>';
+
+  var worst = null;
+  for (i = 0; i < rows.length; i++) {
+    if (!worst || rows[i].total < worst.total) worst = rows[i];
+  }
+  note.innerHTML = '<b>Read the cost column, not the count.</b> Four players on bye in a '
+    + 'week you can still fill every slot costs you very little; one player on bye at a '
+    + 'position where you carry nobody else is a zero in that slot, and no waiver claim '
+    + 'made that Sunday will fix it. <b>Cost</b> is your optimal lineup that week against '
+    + 'a normal week for this roster, under your own scoring and slots — the real damage '
+    + 'rather than the number of names.'
+    + (worst ? ' Your thinnest week ahead is <b>week ' + worst.week + '</b> at '
+        + worst.total.toFixed(1) + ' points.' : '')
+    + '<br><br>Only positions the bye actually breaks are flagged. A position you carry '
+    + 'nobody at is a standing hole rather than a bye problem, and listing it against '
+    + 'every week would bury the weeks that genuinely break.'
+    + '<br><br>Byes are the one absence you can see coming, so the move is to carry the '
+    + 'cover a week or two early — the useful backup at a thin position is usually gone '
+    + 'by the week you need him.';
 }
 
 /* ---- why a projection is what it is -------------------------------------
@@ -2235,7 +2525,7 @@ function renderWhy() {
     return;
   }
 
-  var result = metricShapley(player.position, drivers);
+  var result = baseShap(player);
   if (!result) { host.innerHTML = '<div class="empty">No breakdown.</div>'; return; }
   var unadjusted = result.average, k;
   for (k in result.phi) if (result.phi.hasOwnProperty(k)) unadjusted += result.phi[k];
