@@ -1429,7 +1429,37 @@ function flags(entry) {
     out += ' <span class="tag">sources differ ' + w.spread.toFixed(1) + '</span>';
   }
   out += watchFlags(entry.player);
+  out += redzoneFlag(entry.player);
   return out;
+}
+
+/* INHERITED GOAL-LINE WORK, which the projection cannot see.
+
+   The model projects a back from his own history, and his history does not know that
+   the man who took half his red-zone carries plays somewhere else now. Measured over
+   201 returning back-seasons, a back absorbs 0.19 of every point of red-zone share his
+   departed teammates vacated (r=0.188, monotone across quartiles), and a red-zone carry
+   is worth 0.238 touchdowns — three times the effect of vacated carries generally,
+   because goal-line work converts far better than any other kind.
+
+   Displayed, never projected, on the departures.py precedent. It is deliberately shown
+   in POINTS rather than share, because "23% of the red zone is free" is not something a
+   manager can weigh against a projection and "worth about nine points" is. */
+function redzoneFlag(player) {
+  var rz = player.redzone_upside;
+  if (!rz) return '';
+  var who = [];
+  for (var i = 0; i < (rz.left || []).length; i++) {
+    who.push(rz.left[i].name + ' (' + rz.left[i].rz_att + ' rz carries) to '
+      + (rz.left[i].to || 'free agency'));
+  }
+  var title = 'His team vacated ' + Math.round(rz.share * 100) + '% of its red-zone '
+    + 'plays: ' + who.join(', ') + '. Backs absorb about 19% of vacated red-zone work '
+    + '(measured on 201 returning back-seasons, r=0.19), so roughly ' + rz.carries
+    + ' extra red-zone carries, worth about ' + rz.points + ' points at the league rate '
+    + 'of 0.238 touchdowns per red-zone carry. This is NOT in the projection beside it.';
+  return ' <span class="tag good" title="' + esc(title) + '">+' + rz.carries.toFixed(0)
+    + ' rz car</span>';
 }
 
 /* HIS RECORD AGAINST THIS OPPONENT — printed next to his own average, deliberately.
