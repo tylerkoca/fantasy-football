@@ -413,6 +413,14 @@
   .up   { color: var(--good); }
   .down { color: var(--critical); }
   .slot { color: var(--muted); font-size: 11px; letter-spacing: .5px; }
+  /* Slot-by-slot breakdown under a trade verdict. Wraps rather than scrolls: there are
+     at most nine of these and a manager reads them as a set, not a list. */
+  .slotmoves { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+               margin: 10px 0 2px; padding-top: 9px;
+               border-top: 1px solid var(--line-soft); }
+  .slotmoves .slot { flex-basis: 100%; }
+  .slotmove { display: inline-flex; align-items: baseline; gap: 5px; font-size: 14px;
+              font-variant-numeric: tabular-nums; }
   /* Both sides of a market, stacked so the column stays narrow. Tabular figures keep
      the two prices aligned under each other. */
   .odds { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
@@ -1992,14 +2000,55 @@ function weekReasonCell(entry) {
    "Good teams are around 125 a week" is a real rule of thumb and a stale one: it
    depends on the scoring, the slots and the week, all three of which are configurable
    here. So the benchmark is built the way the league actually builds one — for each
-   slot, the player a middling team would have in it, meaning the Nth best at that
-   position for a league of this size. Recomputed live, so changing scoring or slots
-   moves the benchmark too. */
+   slot, the player a middling team would have in it. Recomputed live, so changing
+   scoring or slots moves the benchmark too. */
 var LEAGUE_SIZE = 12;
 
+/* HOW MANY OF EACH POSITION A LEAGUE OF THIS SIZE ACTUALLY STARTS, and it is not
+   twelve of each. Two running-back slots plus a flex mean roughly twenty-eight backs
+   start every Sunday in a twelve-team league, so the twenty-ninth back is the one
+   available for nothing — THAT is replacement level, not RB12.
+
+   Getting this wrong is not cosmetic and it is what this function was written to fix.
+   Over a rest-of-season RB12 projects 254 points and RB29 projects 183; measuring a
+   roster against the first asks "would adding a high-end RB1 help?", which is true of
+   every roster ever assembled, including one already starting two of the best. It made
+   the Trades tab call a strong position thin.
+
+   Each flex is charged to whichever eligible position has the best next man, which is
+   what a real manager does, and which makes the count fall out of the player pool
+   rather than out of an assumption about it. `byPosition` is position -> descending
+   array of values; the caller decides whether those are one week's points or a
+   rest-of-season total. */
+function leagueStarters(byPosition) {
+  var counts = {}, order = ['QB', 'RB', 'WR', 'TE', 'K', 'DST'], i, p;
+  for (i = 0; i < order.length; i++) {
+    counts[order[i]] = (state.slots[order[i]] || 0) * LEAGUE_SIZE;
+  }
+  var flexes = [], n;
+  for (n = 0; n < (state.slots.FLEX || 0) * LEAGUE_SIZE; n++) flexes.push(FLEX_OK);
+  for (n = 0; n < (state.slots.SUPERFLEX || 0) * LEAGUE_SIZE; n++) {
+    flexes.push(SUPERFLEX_OK);
+  }
+  for (i = 0; i < flexes.length; i++) {
+    var ok = flexes[i], bestPos = null, bestVal = -1;
+    for (p in ok) {
+      if (!Object.prototype.hasOwnProperty.call(ok, p)) continue;
+      var list = byPosition[p] || [], idx = counts[p] || 0;
+      if (idx < list.length && list[idx] > bestVal) {
+        bestVal = list[idx];
+        bestPos = p;
+      }
+    }
+    if (bestPos === null) break;
+    counts[bestPos] = counts[bestPos] + 1;
+  }
+  return counts;
+}
+
 function benchmarkLineup(week) {
-  var byPosition = {};
-  for (var i = 0; i < PLAYERS.length; i++) {
+  var byPosition = {}, i;
+  for (i = 0; i < PLAYERS.length; i++) {
     var p = PLAYERS[i];
     var entry = entryFor(p, week);
     if (!entry || entry.week.is_bye) continue;
@@ -2010,30 +2059,41 @@ function benchmarkLineup(week) {
       byPosition[key].sort(function (a, b) { return b - a; });
     }
   }
-  var slots = slotList(), total = 0, taken = {};
+  var starters = leagueStarters(byPosition);
+  var mid = Math.floor(LEAGUE_SIZE / 2);
+
+  /* Everyone who starts in a flex rather than at his own position, pooled and ranked
+     together. Drawing the pool from leagueStarters rather than re-running the greedy
+     is what keeps two flexes from both reaching for the same man: they take two
+     consecutive tiers out of one list. */
+  var flexPool = [], order = ['QB', 'RB', 'WR', 'TE'], oi;
+  for (oi = 0; oi < order.length; oi++) {
+    var pos = order[oi], all = byPosition[pos] || [];
+    var dedicated = (state.slots[pos] || 0) * LEAGUE_SIZE;
+    var last = Math.min(all.length, starters[pos] || 0);
+    for (var f = dedicated; f < last; f++) flexPool.push(all[f]);
+  }
+  flexPool.sort(function (a, b) { return b - a; });
+
+  /* A slot's twelve occupants form one tier, and a MIDDLING team owns the middle of
+     it. Taking the bottom of the tier would be replacement level, which is a different
+     question and the one `leagueStarters` answers. The previous version advanced by one
+     rank per slot instead of by a full tier, so a second running-back slot was filled
+     by RB13 rather than RB24 — too low at the first slot and too high at the second, an
+     error that happened to cancel under the default lineup and would not have under any
+     other. */
+  var slots = slotList(), total = 0, used = {}, flexTaken = 0;
   for (var s = 0; s < slots.length; s++) {
     var slot = slots[s];
-    /* A flex is filled from whichever eligible position runs deepest, which is what a
-       real manager does. Everything else takes the next unclaimed body at its own
-       position, counting one starter per team. */
-    var pool = slot === 'FLEX' ? ['RB', 'WR', 'TE']
-      : slot === 'SUPERFLEX' ? ['QB', 'RB', 'WR', 'TE'] : [slot];
-    var best = 0;
-    for (var q = 0; q < pool.length; q++) {
-      var list = byPosition[pool[q]] || [];
-      var index = (taken[pool[q]] || 0) + LEAGUE_SIZE - 1;
-      var value = index < list.length ? list[index] : 0;
-      if (value > best) { best = value; }
+    if (slot === 'FLEX' || slot === 'SUPERFLEX') {
+      var fi = flexTaken + mid;
+      total += fi < flexPool.length ? flexPool[fi] : 0;
+      flexTaken += LEAGUE_SIZE;
+    } else {
+      var list2 = byPosition[slot] || [], index = (used[slot] || 0) + mid;
+      total += index < list2.length ? list2[index] : 0;
+      used[slot] = (used[slot] || 0) + LEAGUE_SIZE;
     }
-    // Charge the slot to the deepest pool so two flexes do not both take the same man.
-    var chosen = pool[0];
-    for (var q2 = 0; q2 < pool.length; q2++) {
-      var l2 = byPosition[pool[q2]] || [];
-      var i2 = (taken[pool[q2]] || 0) + LEAGUE_SIZE - 1;
-      if (i2 < l2.length && l2[i2] === best) { chosen = pool[q2]; break; }
-    }
-    taken[chosen] = (taken[chosen] || 0) + 1;
-    total += best;
   }
   return total;
 }
@@ -2099,14 +2159,16 @@ function squadReport(result, par, gap) {
   var shaped = cachedShape(), rows = shaped.value;
   var thin = [], deep = [];
   for (var s = 0; s < rows.length; s++) {
-    if (rows[s].gain > 8) thin.push(rows[s]);
-    else if (rows[s].gain <= TRADE_MIN_GAIN) deep.push(rows[s]);
+    /* `upgrade`, not `gain` — the cover half of the gain is a bye week, and counting it
+       here reported a thin spot at every single-slot position on every roster. */
+    if (rows[s].upgrade > 8) thin.push(rows[s]);
+    else if (rows[s].upgrade <= TRADE_MIN_GAIN) deep.push(rows[s]);
   }
   if (thin.length) {
     var names = [];
     for (var t = 0; t < thin.length && t < 2; t++) {
-      names.push('<b>' + thin[t].position + '</b> (a middling starter there would add '
-        + thin[t].gain.toFixed(0) + ')');
+      names.push('<b>' + thin[t].position + '</b> (a free agent there would add '
+        + thin[t].upgrade.toFixed(0) + ')');
     }
     bits.push('Over the remaining ' + shaped.weeks + ' weeks the thin spot is '
       + names.join(' and ') + '.'
@@ -2118,7 +2180,7 @@ function squadReport(result, par, gap) {
           : ' The Trades tab scores specific swaps against it.'));
   } else if (rows.length) {
     bits.push('Over the remaining ' + shaped.weeks + ' weeks no position is a hole — '
-      + 'a middling starter anywhere would add under 8 points to your lineup, which '
+      + 'the best free agent anywhere would add under 8 points to your lineup, which '
       + 'is what a genuinely balanced roster looks like.');
   }
   return bits.join(' ');
@@ -4191,6 +4253,44 @@ function squadTotal(ids, weeks) {
   return total;
 }
 
+/* The same optimisation, kept open by slot instead of collapsed to one number.
+   A verdict of "-20 points" is unarguable and unhelpful; a verdict that says the QB
+   slot gained 12 and the RB slots lost 42 is the same arithmetic and tells you what to
+   do about it. Slots are grouped by name, so the two RB slots report together — which
+   is the honest grain, since the optimiser is free to shuffle who sits in which. */
+function squadBySlot(ids, weeks) {
+  var byWeek = weeklyEntries(ids, weeks), out = {}, total = 0;
+  for (var w = 0; w < byWeek.length; w++) {
+    var lineup = optimize(byWeek[w]).lineup;
+    for (var i = 0; i < lineup.length; i++) {
+      var slot = lineup[i].slot, points = lineup[i].entry ? lineup[i].entry.points : 0;
+      out[slot] = (out[slot] || 0) + points;
+      total += points;
+    }
+  }
+  return { bySlot: out, total: total };
+}
+
+/* Which slots a swap actually moved, biggest mover first. Slots that did not shift are
+   dropped rather than listed at zero: on a nine-slot lineup most of them never move,
+   and printing seven zeroes buries the two lines that matter. */
+function slotDeltas(before, after) {
+  var rows = [], seen = {}, slot;
+  for (slot in before.bySlot) {
+    if (Object.prototype.hasOwnProperty.call(before.bySlot, slot)) seen[slot] = true;
+  }
+  for (slot in after.bySlot) {
+    if (Object.prototype.hasOwnProperty.call(after.bySlot, slot)) seen[slot] = true;
+  }
+  for (slot in seen) {
+    if (!Object.prototype.hasOwnProperty.call(seen, slot)) continue;
+    var delta = (after.bySlot[slot] || 0) - (before.bySlot[slot] || 0);
+    if (Math.abs(delta) >= 0.05) rows.push({ slot: slot, delta: delta });
+  }
+  rows.sort(function (a, b) { return Math.abs(b.delta) - Math.abs(a.delta); });
+  return rows;
+}
+
 /* ids with `drop` removed and `add` appended. Neither list is mutated. */
 function swapIds(ids, drop, add) {
   var out = [], i;
@@ -4234,45 +4334,111 @@ function rawOverWeeks(player, weeks) {
   return total;
 }
 
-/* A middling starter at this position — the same "what a normal team has in that
-   slot" idea benchmarkLineup uses, so the number on Start / Sit and the number
-   here are describing one league rather than two different imagined ones. */
+/* REPLACEMENT LEVEL at this position: the best player who does NOT start anywhere in
+   a league of this size, given these slots. He is the man you could have for a waiver
+   claim, so measuring a roster against him asks the only question worth asking — is
+   this position a hole, or could I fill it off the wire tomorrow?
+
+   This used to take the LEAGUE_SIZE-th best player, which is right for a position with
+   one slot and badly wrong for one with two plus a flex. It probed running back with
+   RB12 and receiver with WR12 — both high-end starters nobody can have — so the tab
+   reported "thin at RB" to a roster starting two of the best backs in the league. The
+   gap is 71 points of rest-of-season at running back and 62 at receiver, which is
+   larger than most of the holes it was being used to find. */
 function positionProbe(position, weeks) {
   var memo = tradeMemoFor();
   if (memo.probe[position] !== undefined) return memo.probe[position];
-  var scored = [];
-  for (var i = 0; i < PLAYERS.length; i++) {
-    if (PLAYERS[i].position !== position) continue;
+
+  /* Every position at once, because the flex count depends on which pool runs
+     deepest — replacement at running back cannot be settled without knowing how many
+     receivers the flex swallows. rawOverWeeks is memoised, so one pass over all
+     players costs less than the per-position pass it replaces. */
+  var ranked = {}, values = {}, i, pos;
+  for (i = 0; i < PLAYERS.length; i++) {
     var total = rawOverWeeks(PLAYERS[i], weeks);
-    if (total > 0) scored.push({ p: PLAYERS[i], total: total });
+    if (total <= 0) continue;
+    pos = PLAYERS[i].position;
+    (ranked[pos] = ranked[pos] || []).push({ p: PLAYERS[i], total: total });
   }
-  scored.sort(function (a, b) { return b.total - a.total; });
-  var pick = scored[LEAGUE_SIZE - 1] || scored[scored.length - 1];
-  memo.probe[position] = pick ? pick.p : null;
+  for (pos in ranked) {
+    if (!Object.prototype.hasOwnProperty.call(ranked, pos)) continue;
+    ranked[pos].sort(function (a, b) { return b.total - a.total; });
+    var vals = [];
+    for (i = 0; i < ranked[pos].length; i++) vals.push(ranked[pos][i].total);
+    values[pos] = vals;
+  }
+  var starters = leagueStarters(values);
+  for (pos in ranked) {
+    if (!Object.prototype.hasOwnProperty.call(ranked, pos)) continue;
+    var list = ranked[pos];
+    var pick = list[starters[pos] || 0] || list[list.length - 1];
+    memo.probe[pos] = pick ? pick.p : null;
+  }
+  if (memo.probe[position] === undefined) memo.probe[position] = null;
   return memo.probe[position];
 }
 
 /* WHERE A SQUAD IS THIN, in the only units that matter.
-   For each position: what would a middling starter there add to this lineup? A
-   big number means the slot is a hole. Zero means adding one more would never
-   crack the lineup, which is the definition of depth — and it is why this cannot
-   be read off a list of raw projections. */
+   For each position: what would a REPLACEMENT-LEVEL player there add to this
+   lineup? A big number means the slot is a hole. Zero means adding one more would
+   never crack the lineup, which is the definition of depth — and it is why this
+   cannot be read off a list of raw projections.
+
+   Replacement level, not a good player, and the distinction is the whole answer.
+   Anyone is improved by a high-end starter, so probing with one reports every
+   roster as thin everywhere; the question worth asking is whether the wire could
+   fix this position tomorrow. */
 function squadShape(ids, weeks, base) {
+  /* THE TOTAL GAIN SPLITS IN TWO, AND CONFLATING THEM CALLED GOOD POSITIONS THIN.
+     If you roster exactly one kicker — as everybody does — then the week he is on bye
+     that slot scores zero, and a free agent is worth a whole week. Measured on a real
+     roster the "thin" numbers were almost entirely that: K +7.7 against a bye week worth
+     7.6, TE +9.6 against 9.4. Ninety-eight per cent of the flag was one empty Sunday,
+     and it fired on every roster, because nobody carries a backup kicker.
+
+     This is the same mistake the Byes card is already written to avoid: a slot nobody
+     can fill is a COVER problem, not a weak position. So each week is classified before
+     it is counted — if the current lineup already fills every slot this position could
+     occupy, the gain there is a genuine UPGRADE; if it leaves one empty, the gain is
+     COVER. The verdict is driven by the upgrade half alone, and the cover half is
+     reported separately, where it belongs. */
+  var byWeek = weeklyEntries(ids, weeks), w;
+  var before = [];
+  for (w = 0; w < byWeek.length; w++) before.push(optimize(byWeek[w]));
+
   var out = [];
   for (var i = 0; i < TRADE_POSITIONS.length; i++) {
     var position = TRADE_POSITIONS[i];
     if (!slotsAllow(position)) continue;
     var probe = positionProbe(position, weeks);
     if (!probe) continue;
-    var gain = squadTotal(ids.concat([probe.gsis_id]), weeks) - base;
+
+    var upgrade = 0, cover = 0;
+    for (w = 0; w < byWeek.length; w++) {
+      var entry = entryFor(probe, weeks[w]);
+      if (!entry || entry.week.is_bye) continue;  // the probe is off too: no help
+      var delta = optimize(byWeek[w].concat([entry])).total - before[w].total;
+      if (delta <= 0) continue;
+      /* An empty slot the probe is eligible for means the roster could not field this
+         position at all that week — a bye, or simply not owning one. */
+      var hole = false;
+      for (var s = 0; s < before[w].lineup.length; s++) {
+        if (!before[w].lineup[s].entry
+            && eligible(before[w].lineup[s].slot, position)) { hole = true; break; }
+      }
+      if (hole) cover += delta;
+      else upgrade += delta;
+    }
+
     var owned = 0;
     for (var j = 0; j < ids.length; j++) {
       var p = BY_ID[ids[j]];
       if (p && p.position === position) owned++;
     }
-    out.push({ position: position, gain: gain, owned: owned, probe: probe });
+    out.push({ position: position, gain: upgrade + cover, upgrade: upgrade,
+               cover: cover, owned: owned, probe: probe });
   }
-  out.sort(function (a, b) { return b.gain - a.gain; });
+  out.sort(function (a, b) { return b.upgrade - a.upgrade; });
   return out;
 }
 
@@ -4318,7 +4484,9 @@ function tradeIdeas(myIds, weeks, myBase, myShape) {
   /* Handed in rather than recomputed: renderTrade already has it for the table above,
      and squadShape is the second most expensive thing on this tab. */
   var myNeed = {}, s;
-  for (s = 0; s < myShape.length; s++) myNeed[myShape[s].position] = myShape[s].gain;
+  /* `upgrade`, never `gain`: a hole that is only a bye week is fixed with a streamer,
+     and steering the search toward it would propose trading for a backup kicker. */
+  for (s = 0; s < myShape.length; s++) myNeed[myShape[s].position] = myShape[s].upgrade;
   var myDepth = rosterDepth(myIds, weeks);
 
   /* PASS ONE — cheap. Build every plausible pair across the league using raw points
@@ -4495,9 +4663,22 @@ function renderTradeVerdict() {
   }
   var weeks = remainingWeeks(), myIds = state.roster;
   var theirIds = partnerIds();
-  var myBase = squadTotal(myIds, weeks);
+  /* Kept open by slot on my side, because "why" is the whole question a grade raises.
+     The other side stays a single number: it is their problem to break down. */
+  var sendMap = {}, si;
+  for (si = 0; si < sending.length; si++) sendMap[sending[si]] = true;
+  var mineBefore = squadBySlot(myIds, weeks);
+  var mineAfter = squadBySlot(swapIds(myIds, sendMap, receiving), weeks);
+  var myBase = mineBefore.total;
   var theirBase = theirIds ? squadTotal(theirIds, weeks) : 0;
-  var graded = gradeTrade(myIds, theirIds, sending, receiving, weeks, myBase, theirBase);
+  var theirGrade = null;
+  if (theirIds) {
+    var getMap = {}, gi;
+    for (gi = 0; gi < receiving.length; gi++) getMap[receiving[gi]] = true;
+    theirGrade = squadTotal(swapIds(theirIds, getMap, sending), weeks) - theirBase;
+  }
+  var graded = { mine: mineAfter.total - myBase, theirs: theirGrade };
+  var moved = slotDeltas(mineBefore, mineAfter);
 
   var html = '<div class="verdictrow"><span class="who">Your lineup</span>'
     + '<span class="delta ' + (graded.mine >= 0 ? 'up' : 'down') + '">'
@@ -4512,6 +4693,19 @@ function renderTradeVerdict() {
       + (graded.theirs >= 0 ? '+' : '') + graded.theirs.toFixed(1) + '</span>'
       + '<span class="who" style="min-width:0">what it does for them</span></div>';
   }
+  /* WHERE THE POINTS WENT. A two-for-one that grades negative looks like an error
+     until you can see that the slot you upgraded was already filled. */
+  if (moved.length) {
+    html += '<div class="slotmoves"><span class="slot">What it does to each slot,'
+      + ' over ' + weeks.length + ' weeks:</span>';
+    for (var mi = 0; mi < moved.length; mi++) {
+      html += '<span class="slotmove">' + chip(moved[mi].slot)
+        + '<b class="' + (moved[mi].delta >= 0 ? 'up' : 'down') + '">'
+        + (moved[mi].delta >= 0 ? '+' : '') + moved[mi].delta.toFixed(1)
+        + '</b></span>';
+    }
+    html += '</div>';
+  }
   host.innerHTML = html;
 
   var lines = [];
@@ -4521,6 +4715,23 @@ function renderTradeVerdict() {
   } else if (graded.mine < -TRADE_MIN_GAIN) {
     lines.push('This <b>costs</b> you ' + Math.abs(graded.mine).toFixed(1)
       + ' lineup points. Whatever the names look like, your starters get worse.');
+    /* THE CASE THAT LOOKS LIKE A BUG AND IS NOT: two good players in for one, and the
+       grade still goes down, because the slot they upgrade was already filled. Naming
+       the two slots is the difference between an answer and an assertion. */
+    var gained = null, lost = null, mv;
+    for (mv = 0; mv < moved.length; mv++) {
+      if (moved[mv].delta > 0 && !gained) gained = moved[mv];
+      if (moved[mv].delta < 0 && !lost) lost = moved[mv];
+    }
+    if (gained && lost && receiving.length > sending.length) {
+      lines.push('Getting more bodies back is not the same as getting more points: your '
+        + gained.slot + ' improves by ' + gained.delta.toFixed(1) + ', but you can only '
+        + 'start ' + (state.slots[gained.slot] || 1) + ' of them, so everything above '
+        + 'that sits on your bench scoring nothing for you. Meanwhile your ' + lost.slot
+        + ' drops ' + Math.abs(lost.delta).toFixed(1) + ', and that one you do start '
+        + 'every week. Upgrading a position you have already filled is the most '
+        + 'expensive way to lose a trade, because it is the one that feels like winning.');
+    }
   } else {
     lines.push('This is worth almost nothing to you either way — under a point '
       + 'across the whole rest of the season.');
@@ -4573,26 +4784,67 @@ function renderTrade() {
   var shapeRows = squadShape(myIds, weeks, myBase);
 
   var html = '<table><thead><tr><th class="l">Position</th><th>You roster</th>'
-    + '<th>A middling starter would add</th><th class="l">Read</th>'
-    + '</tr></thead><tbody>';
+    + '<th>Upgrade available</th><th>Weeks you can’t field one</th>'
+    + '<th class="l">Read</th></tr></thead><tbody>';
   for (var i = 0; i < shapeRows.length; i++) {
     var row = shapeRows[i];
-    var verdict = row.gain > 8 ? '<span class="tag bad">thin</span>'
-      : row.gain > TRADE_MIN_GAIN ? '<span class="tag warn">could upgrade</span>'
+    /* JUDGED ON THE UPGRADE HALF ONLY. The cover half is real points but it is not a
+       statement about the position — every single-slot position has a bye, so scoring
+       it here made the table say "thin" about a perfectly good kicker. */
+    var verdict = row.upgrade > 8 ? '<span class="tag bad">thin</span>'
+      : row.upgrade > TRADE_MIN_GAIN ? '<span class="tag warn">could upgrade</span>'
       : '<span class="tag good">set</span>';
+    var coverCell = row.cover > 0.05
+      ? '<span class="tag warn">+' + row.cover.toFixed(1) + '</span>'
+      : '<span class="slot">covered</span>';
     html += '<tr><td class="l">' + chip(row.position) + row.position + '</td>'
       + '<td>' + row.owned + '</td>'
-      + '<td><b>' + (row.gain > 0.05 ? '+' + row.gain.toFixed(1) : '—') + '</b></td>'
+      + '<td><b>' + (row.upgrade > 0.05 ? '+' + row.upgrade.toFixed(1) : '—') + '</b></td>'
+      + '<td>' + coverCell + '</td>'
       + '<td class="l">' + verdict + '</td></tr>';
   }
   shape.innerHTML = html + '</tbody></table>';
-  shapeNote.innerHTML = 'Each row asks one question: if a middling starter at this '
-    + 'position joined your roster, how many points would your <i>starting lineup</i> '
-    + 'gain over the remaining ' + weeks.length + ' weeks? A big number is a hole. A '
-    + 'zero means one more there would never crack your lineup, which is what depth '
-    + 'actually is — and why this cannot be read off a list of projections. The probe '
-    + 'is the ' + LEAGUE_SIZE + 'th-best player at the position, the same yardstick the '
-    + 'Start / Sit benchmark uses.';
+  var probeBits = [];
+  for (var pb = 0; pb < shapeRows.length; pb++) {
+    probeBits.push(shapeRows[pb].position + ' ' + esc(shapeRows[pb].probe.name));
+  }
+  /* Name the cover cases explicitly. "Weeks you can't field one" is a column heading,
+     not an explanation, and the reader needs to know it is almost always a bye. */
+  var coverBits = [];
+  for (var cb = 0; cb < shapeRows.length; cb++) {
+    if (shapeRows[cb].cover > 0.05) {
+      coverBits.push('<b>' + shapeRows[cb].position + '</b> +'
+        + shapeRows[cb].cover.toFixed(1));
+    }
+  }
+  shapeNote.innerHTML = 'Each row asks one question: if the best <i>freely available</i> '
+    + 'player at this position joined your roster, how many points would your '
+    + '<i>starting lineup</i> gain over the remaining ' + weeks.length + ' weeks? A big '
+    + 'number is a hole. A zero means one more there would never crack your lineup, '
+    + 'which is what depth actually is — and why this cannot be read off a list of '
+    + 'projections. '
+    + '<br><br><b>The two columns are different problems and only the first is about '
+    + 'your roster’s quality.</b> <i>Upgrade available</i> counts only the weeks you can '
+    + 'already field the position — so it is genuinely asking "is my guy beatable off '
+    + 'the wire?". <i>Weeks you can’t field one</i> counts the weeks the slot would '
+    + 'otherwise sit empty, which for a position you roster exactly one of means his '
+    + 'bye. '
+    + (coverBits.length
+        ? 'Here that is ' + coverBits.join(', ') + '. '
+        : 'You have every slot covered every week. ')
+    + 'Those points are real, but you fix them with a one-week streamer, not a trade — '
+    + 'and the <b>Read</b> column deliberately ignores them. Scoring them was calling a '
+    + 'perfectly good kicker <i>thin</i> on every roster, because nobody carries a '
+    + 'backup kicker and every kicker has a bye.'
+    + '<br><br>'
+    + '<b>The yardstick is replacement level, not a good player.</b> With '
+    + LEAGUE_SIZE + ' teams and your slots, the league starts '
+    + LEAGUE_SIZE * (state.slots.RB || 0) + '+ running backs and '
+    + LEAGUE_SIZE * (state.slots.WR || 0) + '+ receivers once the flex is counted, so '
+    + 'the probe is the first man past that line, not the 12th-best at the position — '
+    + 'here, ' + probeBits.join(', ') + '. Measuring against a high-end starter instead '
+    + 'reports every roster as thin at running back, including one starting two of the '
+    + 'best in the league.';
 
   /* Partner picker. Rebuilt only when the league changes shape, so a re-render
      while you are mid-selection does not reset your choice. */
@@ -4661,7 +4913,7 @@ function renderTrade() {
 
 var DRAFT = DATA.draft || null;
 
-var HIST = (DATA.facts && DATA.facts.draft_history) || null;
+var DRAFT_HIST = (DATA.facts && DATA.facts.draft_history) || null;
 
 function pct(value) { return (value * 100).toFixed(1) + '%'; }
 
@@ -4678,18 +4930,18 @@ function pct(value) { return (value * 100).toFixed(1) + '%'; }
    beat best-available here, so a rank is a real answer. See history.py. */
 function renderDraftPlan(slot, teams, plan, size) {
   var host = document.getElementById('draftPlan');
-  if (!HIST) {
+  if (!DRAFT_HIST) {
     host.innerHTML = '<div class="empty">No draft backtest in this build — run '
       + 'history.py --generate.</div>';
     return;
   }
-  var overall = HIST.overall || [];
-  var seatRows = (HIST.slots && HIST.slots[slot]) || [];
+  var overall = DRAFT_HIST.overall || [];
+  var seatRows = (DRAFT_HIST.slots && DRAFT_HIST.slots[slot]) || [];
   var seatBy = {};
   for (var i = 0; i < seatRows.length; i++) seatBy[seatRows[i].strategy] = seatRows[i];
   var pairBy = {};
-  for (var p = 0; p < (HIST.paired || []).length; p++) {
-    pairBy[HIST.paired[p].strategy] = HIST.paired[p];
+  for (var p = 0; p < (DRAFT_HIST.paired || []).length; p++) {
+    pairBy[DRAFT_HIST.paired[p].strategy] = DRAFT_HIST.paired[p];
   }
 
   var html = '<table><thead><tr><th>#</th><th class="l">Strategy</th>'
@@ -4722,18 +4974,58 @@ function renderDraftPlan(slot, teams, plan, size) {
   }
   html += '</tbody></table>';
 
-  var span = (HIST.seasons || [0, 0]).join('–');
-  var drafts = 0, boards = HIST.boards || {}, key;
+  /* The span alone over-claims: 2012 is not in the study, because that August only 303
+     drafts were aggregated and the resulting board is half a draft long. Say how many
+     seasons are actually in rather than implying every year between the endpoints. */
+  var used = DRAFT_HIST.seasons_used || [];
+  var span = (DRAFT_HIST.seasons || [0, 0]).join('–')
+    + (used.length ? ' (' + used.length + ' seasons' + ((DRAFT_HIST.seasons_excluded || []).length
+        ? ', ' + DRAFT_HIST.seasons_excluded.join(' and ') + ' excluded — the board that year '
+          + 'was too short to seat twelve teams' : '') + ')' : '');
+  var drafts = 0, boards = DRAFT_HIST.boards || {}, key;
   for (key in boards) {
     if (boards.hasOwnProperty(key)) drafts += (boards[key].drafts || 0);
   }
   /* The per-seat baseline is NOT 8.3% and must be stated, or the column reads as a
      verdict on the seat. Pooled across seats the control is exactly 8.33% by
-     construction, but any single seat rests on roughly seven seasons times the
-     simulation count — a few hundred leagues — so seats scatter from 5.7% to 10.9%
-     purely on sampling. Comparing a strategy's seat number against 8.3% would call
-     pick 1 cursed and pick 4 blessed, and neither is a finding. */
+     construction, but any single seat rests on the season count times the simulation
+     count — a few hundred leagues — so seats scatter widely on sampling alone.
+     Comparing a strategy's seat number against 8.3% would call pick 1 cursed and pick 4
+     blessed, and neither is a finding. */
   var seatControl = seatBy['best available'];
+
+  /* The headline is COUNTED off the paired table, never written in. The sentence here
+     used to name WR-first as the one rule that separated; that was true of seven
+     seasons and false of fourteen, and it would still be on screen. */
+  var sep = [], pairedRows = DRAFT_HIST.paired || [], pr;
+  for (pr = 0; pr < pairedRows.length; pr++) {
+    if (pairedRows[pr].verdict !== 'no different') sep.push(pairedRows[pr]);
+  }
+  var worse = 0;
+  for (pr = 0; pr < pairedRows.length; pr++) {
+    if (pairedRows[pr].finish_delta > 0) worse++;
+  }
+  var headline;
+  if (!sep.length) {
+    headline = '<b>The honest headline: not one of these rules is distinguishable from '
+      + 'just drafting the board.</b> Every strategy lands inside its own error bar of '
+      + 'the auto-draft line'
+      + (worse === pairedRows.length
+          ? ' — and all ' + worse + ' of them land on the <i>worse</i> side of it, which '
+            + 'is the finding worth having: committing to a positional rule costs a '
+            + 'little, consistently, and no single rule costs enough to measure.'
+          : '.');
+  } else {
+    var names = [];
+    for (pr = 0; pr < sep.length; pr++) {
+      names.push('<b>' + esc(sep[pr].strategy) + '</b> ('
+        + (sep[pr].finish_delta > 0 ? 'worse' : 'better') + ' by '
+        + Math.abs(sep[pr].finish_delta).toFixed(2) + ')');
+    }
+    headline = '<b>The honest headline: almost nothing here is distinguishable.</b> Only '
+      + names.join(', ') + ' separates from the auto-draft line; everything else is a '
+      + 'coin flip dressed as a philosophy.';
+  }
 
   host.innerHTML = html
     + '<div class="note"><b>How to read this.</b> Twelve teams draft the real '
@@ -4741,29 +5033,34 @@ function renderDraftPlan(slot, teams, plan, size) {
       + 'left, and one commits to the strategy. Then the season is played out on what '
       + '<i>actually happened</i>. <b>Titles</b> is how often that seat finished first '
       + 'of twelve. A seat with no edge at all wins '
-      + pct(HIST.baseline_title || 0.0833) + ' of the time and averages a '
-      + ((HIST.teams + 1) / 2).toFixed(1) + ' finish — that is the number every row '
+      + pct(DRAFT_HIST.baseline_title || 0.0833) + ' of the time and averages a '
+      + ((DRAFT_HIST.teams + 1) / 2).toFixed(1) + ' finish — that is the number every row '
       + 'has to beat, and it is why <b>best available</b> lands exactly there. It '
       + 'drafts the way the other eleven do, so it is the control, not a '
       + 'recommendation.</div>'
-    + '<div class="note"><b>The honest headline: almost nothing here is '
-      + 'distinguishable.</b> The last column compares each rule against the benchmark '
-      + 'on the <i>same</i> drafts, and puts the error bar across seasons rather than '
-      + 'across simulations — because a season is the thing that independently varies, '
-      + 'so this rests on seven of them, not on thousands of rooms. Under that bar only '
-      + '<b>WR-first</b> separates from the benchmark, and it separates by being worse. '
-      + 'Everything else is a coin flip dressed as a philosophy. Rank order is still '
-      + 'shown because you asked where each stands, but treat the top of the table as a '
-      + 'group, not a winner.</div>'
+    + '<div class="note">' + headline + ' The last column '
+      + 'compares each rule against the line on the <i>same</i> drafts, and puts the '
+      + 'error bar across seasons rather than across simulations — because a season is '
+      + 'the thing that independently varies, so this rests on ' + used.length + ' of '
+      + 'them, not on thousands of rooms. Rank order is still shown because you asked '
+      + 'where each stands, but treat the table as a group, not a winner.</div>'
+    + '<div class="note"><b>Why a positional rule struggles here.</b> Every strategy in '
+      + 'this table is a rule about POSITIONS, and a position rule carries no '
+      + 'information — it cannot know that this back lost his goal-line work or that '
+      + 'this receiver changed teams. All it can do is remove options from a board the '
+      + 'whole room has already priced, which is why deviating from the consensus order '
+      + 'by philosophy alone tends to cost a little. That is not an argument for '
+      + 'auto-drafting. It is an argument that the way to beat the board is a better '
+      + 'opinion about specific players, which is what the rest of this page is for.</div>'
     + '<div class="note"><b>Careful with the “from pick ' + slot + '” column.</b> '
       + 'That is one seat on its own, so it rests on a few hundred leagues rather than '
       + 'the full set, and seats scatter widely on sampling alone. '
       + (seatControl ? 'From this seat the benchmark itself titles '
           + pct(seatControl.title_rate) + ', not '
-          + pct(HIST.baseline_title || 0.0833) + ' — so compare each row against '
+          + pct(DRAFT_HIST.baseline_title || 0.0833) + ' — so compare each row against '
           + pct(seatControl.title_rate) + '. ' : '')
       + 'Across all twelve seats the benchmark averages exactly '
-      + pct(HIST.baseline_title || 0.0833) + '; the seat-to-seat differences in '
+      + pct(DRAFT_HIST.baseline_title || 0.0833) + '; the seat-to-seat differences in '
       + 'between are noise, not a verdict on your draft position.</div>'
     + '<div class="note">Built from ' + drafts.toLocaleString() + ' real PPR drafts '
       + 'aggregated by Fantasy Football Calculator, scored on nflverse results. '
@@ -4782,62 +5079,205 @@ function renderDraftPlan(slot, teams, plan, size) {
 function renderWinners() {
   var host = document.getElementById('draftWinners');
   var note = document.getElementById('draftWinnersNote');
-  if (!HIST || !HIST.winners) { host.innerHTML = ''; note.innerHTML = ''; return; }
-  var w = HIST.winners;
+  if (!DRAFT_HIST || !DRAFT_HIST.winners) { host.innerHTML = ''; note.innerHTML = ''; return; }
+  var w = DRAFT_HIST.winners;
+
+  /* SEPARATION IS DECIDED HERE, NOT BY EYE, and the reference is the LEAGUE AVERAGE
+     rather than the best row above it. In a twelve-team league every team finishes 6.50
+     on average by construction, so "does this opening beat an average team?" is the
+     question with an answer, and it uses each row's own error bar instead of inheriting
+     the widest one in the table. Comparing every row to row one instead made the verdict
+     depend on which rare, wide-barred build happened to sort first. */
+  var PAR = (DRAFT_HIST.teams ? DRAFT_HIST.teams + 1 : 13) / 2;
+  function beatsPar(row) {
+    if (!row || row.spread === undefined) return 0;
+    var lo = row.avg_finish - 2 * row.spread, hi = row.avg_finish + 2 * row.spread;
+    if (hi < PAR) return 1;
+    if (lo > PAR) return -1;
+    return 0;
+  }
+  function separated(a, b) {
+    if (!a || !b || a.spread === undefined || b.spread === undefined) return false;
+    var gap = Math.abs(a.avg_finish - b.avg_finish);
+    return gap > 2 * Math.sqrt(a.spread * a.spread + b.spread * b.spread);
+  }
 
   function table(title, rows, rare) {
     var out = '<table><thead><tr><th class="l">' + title + '</th><th>Rosters</th>'
-      + '<th>Titles</th><th>Avg finish</th></tr></thead><tbody>';
+      + '<th>Seasons</th><th>Titles</th><th>Avg finish</th>'
+      + '<th class="l">Beats an average team?</th></tr></thead><tbody>';
     for (var i = 0; i < rows.length; i++) {
-      var row = rows[i], parts = row.build.split('-'), label = '';
-      for (var c = 0; c < parts.length; c++) label += chip(parts[c]);
+      var row = rows[i], parts = row.build.split('-'), label = '', c;
+      for (c = 0; c < parts.length; c++) label += chip(parts[c]);
+      var call = beatsPar(row);
+      var verdict = call > 0 ? '<span class="tag good">yes</span>'
+        : call < 0 ? '<span class="tag bad">no — worse than average</span>'
+        : '<span class="tag warn">can’t tell them apart</span>';
       out += '<tr><td class="l">' + label + '</td><td>' + row.n.toLocaleString()
-        + '</td><td><b>' + pct(row.title_rate) + '</b></td><td>'
-        + row.avg_finish.toFixed(2) + '</td></tr>';
+        + '</td><td>' + row.seasons + '</td><td><b>' + pct(row.title_rate) + '</b></td>'
+        + '<td>' + row.avg_finish.toFixed(2)
+        + ' <span class="slot">&plusmn;' + (2 * row.spread).toFixed(2) + '</span></td>'
+        + '<td class="l">' + verdict + '</td></tr>';
     }
     out += '</tbody></table>';
     if (rare && rare.length) {
       var names = [];
-      for (var k = 0; k < rare.length; k++) {
+      for (var k = 0; k < rare.length && k < 8; k++) {
         names.push(rare[k].build + ' (' + rare[k].n + ')');
       }
-      out += '<div class="note">Too rare to score, under ' + w.min_n + ' rosters: '
-        + esc(names.join(', ')) + '. The board almost never offers these, which is '
-        + 'itself the finding — a rate built on twenty rosters is one team either '
-        + 'way.</div>';
+      out += '<div class="note">Too rare to score, under ' + w.min_n + ' rosters or seen '
+        + 'in too few seasons: ' + esc(names.join(', '))
+        + (rare.length > 8 ? ', and ' + (rare.length - 8) + ' more' : '')
+        + '. The board almost never offers these, which is itself the finding — a rate '
+        + 'built on twenty rosters is one team either way.</div>';
     }
     return out;
   }
 
-  host.innerHTML = table('First pick', w.round1 || [], w.round1_rare)
-    + table('First two picks', w.first_two || [], w.first_two_rare);
+  /* THE THIRD PICK, CONDITIONED ON THE FIRST TWO. Every named strategy on this tab is a
+     rule about rounds one and two; none of them has anything to say about round three,
+     so this is the one decision the ranking above cannot reach. Conditioning matters:
+     "a third back does worse" would be confounded by which openings lead to one, while
+     "you already have two backs — does a third help?" is a decision a drafter is
+     actually facing. */
+  function thirdTable(rows) {
+    if (!rows || !rows.length) return '';
+    var out = '<table><thead><tr><th class="l">You opened</th>'
+      + '<th class="l">Then took</th><th>Rosters</th><th>Titles</th>'
+      + '<th>Avg finish</th><th class="l">Verdict</th></tr></thead><tbody>';
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i], opts = row.options, parts = row.opened.split('-'), lead = '', c;
+      for (c = 0; c < parts.length; c++) lead += chip(parts[c]);
+      for (var o = 0; o < opts.length; o++) {
+        var opt = opts[o];
+        /* Three outcomes, not two. A gap that clears a naive bar and fails the corrected
+           one is called out by name rather than rounded to either verdict, because that
+           is exactly the row a reader would otherwise act on. */
+        var verdict;
+        if (row.separated) {
+          verdict = opt.took === row.best
+            ? '<span class="tag good">best of these</span>'
+            : opt.took === row.worst
+              ? '<span class="tag bad">costs ' + row.gap.toFixed(2) + ' of a place</span>'
+              : '';
+        } else if (o === 0) {
+          verdict = row.separated_uncorrected
+            ? '<span class="tag warn">looks real, isn’t</span>'
+            : '<span class="tag warn">no choice here matters</span>';
+        } else {
+          verdict = '';
+        }
+        out += '<tr><td class="l">' + (o === 0 ? lead : '') + '</td>'
+          + '<td class="l">' + chip(opt.took) + '</td>'
+          + '<td>' + opt.n.toLocaleString() + '</td>'
+          + '<td>' + pct(opt.title_rate) + '</td>'
+          + '<td>' + opt.avg_finish.toFixed(2)
+          + ' <span class="slot">&plusmn;' + (2 * opt.spread).toFixed(2) + '</span></td>'
+          + '<td class="l">' + verdict + '</td></tr>';
+      }
+    }
+    return out + '</tbody></table>';
+  }
 
-  var one = (w.round1 || [])[0];
-  note.innerHTML = '<b>Every seat drafts the consensus board here</b> — no strategy is '
-    + 'imposed. Each roster is simply labelled by what it took early and by where it '
-    + 'finished, so this is what winning teams looked like rather than what a rule '
-    + 'predicts.'
-    + (one ? ' Teams that opened with a ' + esc(one.build) + ' titled '
-        + pct(one.title_rate) + ' of the time against a ' + pct(HIST.baseline_title)
-        + ' baseline.' : '')
-    + '<br><br><b>The running back result is the one worth acting on</b>, and it is '
-    + 'small: opening RB beats opening WR, and the weakest common build is taking '
-    + 'receivers with both of your first two picks. That agrees with the scarcity '
-    + 'table below — backs are worth more <i>over replacement</i> even though '
-    + 'receivers score more raw points — and it is the same direction the strategy '
-    + 'ranking found. Two independent cuts of the data agreeing is the strongest claim '
-    + 'on this tab, and it is still worth well under one finishing place.';
+  host.innerHTML = table('First pick', w.round1 || [], w.round1_rare)
+    + table('First two picks, in order', w.first_two || [], w.first_two_rare)
+    + '<h3>Your third pick, given your first two</h3>'
+    + thirdTable(w.third)
+    + '<h3>The full opening sequence</h3>'
+    + table('First three picks, in order', w.first_three || [], w.first_three_rare);
+
+  /* THE READING IS DERIVED, NEVER WRITTEN IN. An earlier version of this note asserted
+     that opening RB beat opening WR, which was true of the seven seasons it was written
+     against and is not a fact the code checks. Doubling the seasons moved it. A sentence
+     that survives a data change it should not have survived is worse than no sentence,
+     so the conclusion below is read off the table every time it renders. */
+  var one = (w.round1 || [])[0], two = (w.round1 || [])[1];
+  var openings = w.first_two || [];
+  var verdict;
+  if (one && two && separated(one, two)) {
+    verdict = 'Opening <b>' + esc(one.build) + '</b> genuinely beats opening <b>'
+      + esc(two.build) + '</b> — ' + one.avg_finish.toFixed(2) + ' against '
+      + two.avg_finish.toFixed(2) + ', a gap wider than the season-to-season spread of '
+      + 'either. It is still worth ' + (two.avg_finish - one.avg_finish).toFixed(2)
+      + ' of one finishing place in a twelve-team league.';
+  } else if (one && two) {
+    verdict = 'Opening <b>' + esc(one.build) + '</b> and opening <b>' + esc(two.build)
+      + '</b> come out <b>the same</b>: ' + one.avg_finish.toFixed(2) + ' against '
+      + two.avg_finish.toFixed(2) + ', inside the season-to-season spread of both. The '
+      + 'oldest argument in the game does not settle on ' + w.seasons + ' seasons of '
+      + 'real boards, and anyone telling you it does is reading a smaller sample than '
+      + 'this one.';
+  } else {
+    verdict = '';
+  }
+  /* The third-pick headline, also derived. Only rows that cleared their own bar are
+     quoted, and if none did the note says that instead of promoting the largest gap it
+     can find — which is how a table of noise becomes advice. */
+  var acted = [], nearly = [], third = w.third || [];
+  for (var t = 0; t < third.length; t++) {
+    if (third[t].separated) acted.push(third[t]);
+    else if (third[t].separated_uncorrected) nearly.push(third[t]);
+  }
+  var thirdSays = '';
+  if (acted.length) {
+    var bits = [];
+    for (var a = 0; a < acted.length && a < 3; a++) {
+      bits.push('after <b>' + esc(acted[a].opened) + '</b>, take a <b>'
+        + esc(acted[a].best) + '</b> rather than a <b>' + esc(acted[a].worst) + '</b> ('
+        + acted[a].gap.toFixed(2) + ' of a place)');
+    }
+    thirdSays = '<b>Round three is the one decision the ranking above cannot reach</b> — '
+      + 'every named strategy is a rule about your first two picks. Measured: '
+      + bits.join('; ') + '. That is small, and it is the largest effect on this tab that '
+      + 'clears its own error bar.';
+  } else {
+    thirdSays = '<b>Not even the third pick separates.</b> Given the same first two '
+      + 'picks, no third position finished better than the others by more than its own '
+      + 'season-to-season spread.';
+    if (nearly.length) {
+      var n0 = nearly[0];
+      thirdSays += ' The closest was <b>' + esc(n0.opened) + '</b> → <b>' + esc(n0.best)
+        + '</b> over <b>' + esc(n0.worst) + '</b> at ' + n0.gap.toFixed(2)
+        + ' of a place, and it is worth understanding why that is not being reported as '
+        + 'a finding. It clears a plain two-standard-error bar of '
+        + n0.bar_uncorrected.toFixed(2) + ' — by ' + (n0.gap - n0.bar_uncorrected).toFixed(2)
+        + ' — but ' + n0.tests + ' openings were tested, and at that bar roughly one in '
+        + 'four sets of ' + n0.tests + ' pure-noise comparisons throws up a winner. '
+        + 'Correcting for having looked ' + n0.tests + ' times puts the bar at '
+        + n0.bar.toFixed(2) + ' and it stops clearing. Both numbers are in the table so '
+        + 'you can see what the correction cost.';
+    }
+  }
+
+  note.innerHTML = '<b>Every seat drafts the consensus board here</b> — no rule is '
+    + 'imposed on anyone. Each roster is labelled by the sequence it actually opened '
+    + 'with, in order, and by where it finished, so this is what winning teams looked '
+    + 'like rather than what a philosophy predicts. Order is kept because it is the part '
+    + 'you control: taking a back then a receiver costs different picks than the reverse, '
+    + 'and leaves you needing different things in round three.'
+    + '<br><br>' + verdict
+    + (openings.length
+        ? ' Across the openings the board actually produces, <b>' + esc(openings[0].build)
+          + '</b> finishes best at ' + openings[0].avg_finish.toFixed(2) + '.'
+        : '')
+    + '<br><br>' + thirdSays
+    + '<br><br><b>Titles and average finish are different questions, and this table shows '
+    + 'them disagreeing.</b> Some openings finish worse on average while winning more '
+    + 'often — they are high-variance builds, more titles and more last places. If your '
+    + 'league pays only first, that trade is one you want; if it pays the top four, it is '
+    + 'one you do not. The table prints both columns rather than picking for you.'
+    + '<br><br><b>The error bar is the whole story here.</b> Every roster inside one '
+    + 'season shares that season’s injuries and breakouts, so ' + w.seasons + ' seasons '
+    + 'is the sample, not the thousands of rosters. In a twelve-team league every team '
+    + 'averages a ' + PAR.toFixed(2) + ' finish by construction, so the last column asks '
+    + 'whether an opening beats an average team — and most cannot be told apart from one.';
 }
 
 /* The three arguments this tab exists to settle, each as a straight head-to-head. */
 function renderDuels() {
   var host = document.getElementById('draftDuels');
   var note = document.getElementById('draftDuelsNote');
-  if (!HIST || !HIST.duels) { host.innerHTML = ''; note.innerHTML = ''; return; }
-  var pairBy = {};
-  for (var p = 0; p < (HIST.paired || []).length; p++) {
-    pairBy[HIST.paired[p].strategy] = HIST.paired[p];
-  }
+  if (!DRAFT_HIST || !DRAFT_HIST.duels) { host.innerHTML = ''; note.innerHTML = ''; return; }
   /* Columns show AVERAGE FINISH, because that is the metric that decides the duel.
      Showing title rate here instead printed a flat contradiction: early-QB "came out
      ahead" of late-QB on finish (6.60 to 6.68) while the title column beside it read
@@ -4848,15 +5288,15 @@ function renderDuels() {
     + '<th class="l">Verdict</th><th class="l">Better average finish</th>'
     + '<th class="l">The other rule</th>'
     + '<th class="l">Is the gap real?</th></tr></thead><tbody>';
-  for (var i = 0; i < HIST.duels.length; i++) {
-    var d = HIST.duels[i];
-    var wp = pairBy[d.winner], lp = pairBy[d.loser];
-    /* A duel is only meaningful if at least one side separated from the benchmark.
-       Two rules that are both indistinguishable from just taking the best player are
-       also indistinguishable from each other, and printing a winner there would be
-       inventing a result out of a 0.05 gap. */
-    var real = (wp && wp.verdict !== 'no different')
-      || (lp && lp.verdict !== 'no different');
+  for (var i = 0; i < DRAFT_HIST.duels.length; i++) {
+    var d = DRAFT_HIST.duels[i];
+    /* DECIDED BY THE DIRECT PAIRED TEST, not by whether either side beat the control.
+       The old rule asked "did either separate from best-available?", which is a
+       question about the CONTROL'S noise rather than about these two plans: both sides
+       of the backs-first argument are "no different" from the line while sitting 0.35
+       of a place apart. Differencing the two on the same drawn rooms cancels the season
+       luck they share, which is the comparison a drafter is actually making. */
+    var real = d.separated;
     html += '<tr><td class="l"><b>' + esc(d.question) + '</b></td>'
       + '<td class="l">' + (real
           ? '<b>' + esc(d.winner) + '</b>'
@@ -4864,25 +5304,50 @@ function renderDuels() {
       + '<td class="l">' + esc(d.winner) + ' ' + d.winner_finish.toFixed(2) + '</td>'
       + '<td class="l">' + esc(d.loser) + ' ' + d.loser_finish.toFixed(2) + '</td>'
       + '<td class="l">' + (real
-          ? '<span class="tag good">yes — ' + d.margin.toFixed(2) + ' of a place</span>'
-          : '<span class="tag warn">no, ' + d.margin.toFixed(2)
-            + ' of a place — noise</span>') + '</td></tr>';
+          ? '<span class="tag good">yes — ' + Math.abs(d.paired_gap).toFixed(2)
+            + ' of a place</span>'
+          : '<span class="tag warn">no — ' + Math.abs(d.paired_gap || 0).toFixed(2)
+            + ' &plusmn; ' + (2 * (d.paired_stderr || 0)).toFixed(2) + '</span>')
+      + (d.paired_seasons
+          ? '<br><span class="slot">better in ' + d.paired_seasons_better + ' of '
+            + d.paired_seasons + ' seasons</span>'
+          : '')
+      + '</td></tr>';
   }
   host.innerHTML = html + '</tbody></table>';
-  note.innerHTML = '<b>Read the last column first.</b> Only the running-back argument '
-    + 'produced a gap big enough to separate from chance. The quarterback and tight '
-    + 'end arguments came out as ties: paying up for a quarterback and streaming one '
-    + 'finished within a tenth of a place of each other, and so did the elite tight '
-    + 'end against punting the position. On a tie the two middle columns can even '
-    + 'disagree about which side looks better depending on whether you read average '
-    + 'finish or titles — which is exactly what a tie looks like, and why no winner is '
-    + 'named.'
-    + '<br><br>That is a genuinely useful answer even though it names no winner. It '
-    + 'means <b>the quarterback and tight end decisions are not where your draft is '
-    + 'won or lost</b> — take whichever you prefer and spend your attention on the '
-    + 'picks that do move the needle. It also means the confident advice you will read '
-    + 'elsewhere about waiting on a quarterback is, on seven seasons of real boards and '
-    + 'real results, not measurable.';
+  /* THE SUMMARY IS COUNTED, NOT ASSERTED. This note used to open "only the running-back
+     argument produced a gap big enough to separate from chance", which was true of the
+     seven seasons it was written against. Fourteen seasons moved it, and a hardcoded
+     sentence would have gone on saying it. Count the ties instead. */
+  var ties = 0, settled = [];
+  for (var q = 0; q < DRAFT_HIST.duels.length; q++) {
+    var dd = DRAFT_HIST.duels[q];
+    if (dd.separated) settled.push(dd.winner + ' over ' + dd.loser);
+    else ties++;
+  }
+  var seasons = (DRAFT_HIST.winners && DRAFT_HIST.winners.seasons) || '';
+  note.innerHTML = '<b>Read the last column first.</b> '
+    + (ties === DRAFT_HIST.duels.length
+        ? 'On ' + seasons + ' seasons of real boards and real results, <b>all '
+          + ties + ' of these arguments come out as ties</b>. Not one of them produced a '
+          + 'gap big enough to separate from chance.'
+        : settled.length + ' of these ' + DRAFT_HIST.duels.length + ' arguments settled ('
+          + esc(settled.join(', ')) + '); the rest are ties.')
+    + ' On a tie the two middle columns can even disagree about which side looks better '
+    + 'depending on whether you read average finish or titles — which is exactly what a '
+    + 'tie looks like, and why no winner is named.'
+    + '<br><br>That is a genuinely useful answer even though it names no winner. It means '
+    + '<b>these decisions are not where your draft is won or lost</b> — take whichever '
+    + 'you prefer and spend your attention elsewhere. The confident advice you will read '
+    + 'about waiting on a quarterback, or punting tight end, is on ' + seasons + ' seasons '
+    + 'of real boards not measurable in either direction.'
+    + '<br><br><b>Why a named rule struggles to beat the board.</b> Every strategy here is '
+    + 'a rule about POSITIONS, and a position rule carries no information — it cannot know '
+    + 'that this particular back lost his goal-line work or that this receiver changed '
+    + 'teams. It can only remove options from a board the whole room already priced. That '
+    + 'is why the auto-draft line is hard to beat with a philosophy, and it is not an '
+    + 'argument for auto-drafting: it is an argument that the way to beat the board is a '
+    + 'better opinion about specific players, which is what the rest of this page is for.';
 }
 
 /* Positional scarcity in plain words, using this league's real numbers.
