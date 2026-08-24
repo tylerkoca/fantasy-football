@@ -839,12 +839,13 @@
     </div>
     <div class="card">
       <h2>What actually won
-        <span class="tag">measured, 2019–2025</span></h2>
+        <span class="tag" id="draftWinnersSpan">measured on real drafts</span></h2>
       <div id="draftWinners"></div>
       <div class="note" id="draftWinnersNote"></div>
     </div>
     <div class="card">
-      <h2>The three arguments, settled</h2>
+      <h2>The arguments, head to head
+        <span class="tag" id="draftDuelsSpan">tested against each other</span></h2>
       <div id="draftDuels"></div>
       <div class="note" id="draftDuelsNote"></div>
     </div>
@@ -1191,8 +1192,11 @@ function optimize(entries) {
   for (i = 0; i < padded; i++) {
     var row = [];
     for (j = 0; j < padded; j++) {
+      /* A player on IR or PUP is as unstartable as a player on a bye, and for a harder
+         reason — the bye ends. Excluding him here rather than at every call site means
+         the lineup, the waiver gains and the trade grades all agree by construction. */
       var ok = i < n && j < m && eligible(slots[i], entries[j].position)
-               && !entries[j].week.is_bye;
+               && !entries[j].week.is_bye && !unavailable(entries[j].player);
       row.push(ok ? -entries[j].points : 0);
     }
     cost.push(row);
@@ -1203,7 +1207,8 @@ function optimize(entries) {
     var pick = assign[i];
     var entry = (pick >= 0 && pick < m
                  && eligible(slots[i], entries[pick].position)
-                 && !entries[pick].week.is_bye) ? entries[pick] : null;
+                 && !entries[pick].week.is_bye
+                 && !unavailable(entries[pick].player)) ? entries[pick] : null;
     if (entry) used[entry.player.gsis_id] = true;
     lineup.push({ slot: slots[i], entry: entry });
   }
@@ -1428,6 +1433,8 @@ function bandCell(entry) {
 
 function flags(entry) {
   var out = '', w = entry.week;
+  /* First, because it is the one that changes what you do on Sunday. */
+  out += injuryFlag(entry.player);
   if (w.is_bye) out += ' <span class="tag bad">BYE</span>';
   if (w.low_signal) out += ' <span class="tag">low signal</span>';
   if (w.play_probability !== undefined && w.play_probability < 0.99) {
@@ -1453,6 +1460,38 @@ function flags(entry) {
    Displayed, never projected, on the departures.py precedent. It is deliberately shown
    in POINTS rather than share, because "23% of the red zone is free" is not something a
    manager can weigh against a projection and "worth about nine points" is. */
+/* LIVE INJURY STATUS, and the hard/soft split is the whole point.
+   `hard` — IR, PUP, NFI, Out, Suspended — is a fact about availability, so the player
+   is struck through and the optimizer refuses to start him. Before this the site would
+   happily put a man on injured reserve in your lineup at his usual projection, which is
+   a wrong answer rather than a missing one.
+   `soft` — Questionable, Doubtful — is a REPORT, and it is deliberately not converted
+   into a projection. availability.py fitted P(active) on in-season official reports;
+   a preseason "Questionable" is a different population, and 113 players carry one right
+   now including men who are plainly fine. So it is badged and the number is left alone.
+   See injuries.py. */
+function injuryFlag(player) {
+  var inj = player.injury;
+  if (!inj) return '';
+  var hard = inj.severity === 'hard';
+  var part = inj.part && inj.part !== 'Undisclosed' ? ' (' + inj.part + ')' : '';
+  var title = hard
+    ? inj.status + part + ' — he will not play, so he is excluded from your optimal '
+      + 'lineup and from waiver suggestions. His projection is still shown so you can '
+      + 'see what you are missing.'
+    : inj.status + part + ' — reported, and deliberately NOT applied to the projection '
+      + 'beside it. The measured P(active) table was fitted on in-season official '
+      + 'injury reports, and a preseason tag is a different thing; treating them as the '
+      + 'same would quietly mark healthy stars down. Judge it yourself.';
+  return ' <span class="tag ' + (hard ? 'bad' : 'warn') + '" title="' + esc(title) + '">'
+    + esc(inj.status) + (hard ? '' : part) + '</span>';
+}
+
+/* Does this man count as startable at all? Only a HARD status removes him. */
+function unavailable(player) {
+  return !!(player && player.injury && player.injury.severity === 'hard');
+}
+
 function redzoneFlag(player) {
   var rz = player.redzone_upside;
   if (!rz) return '';
@@ -3814,18 +3853,28 @@ function renderWaivers() {
      Running the optimizer for a thousand players x eighteen weeks would be pointless
      as well as slow: a player who cannot crack the top 140 on raw points is not about
      to improve anybody's starting lineup. */
+  /* COUNTED, NOT ASSUMED. A three-row waiver table is indistinguishable from a broken
+     league import unless the page says how many players it actually looked at — and
+     "the list looks wrong" is the correct reaction to a number with no denominator.
+     These counts are what turn "is it pulling my league right?" into something the
+     reader can check. */
+  var seen = { pool: 0, mine: 0, owned: 0, noProjection: 0, offPosition: 0 };
   var candidates = [];
   for (var i = 0; i < PLAYERS.length; i++) {
     var p = PLAYERS[i];
-    if (mine[p.gsis_id] || owned[p.gsis_id]) continue;
-    if (position !== 'ALL' && p.position !== position) continue;
+    seen.pool++;
+    if (mine[p.gsis_id]) { seen.mine++; continue; }
+    if (owned[p.gsis_id]) { seen.owned++; continue; }
+    if (position !== 'ALL' && p.position !== position) { seen.offPosition++; continue; }
     var raw = 0, played = 0;
     for (var w = 0; w < weeks.length; w++) {
       var entry = entryFor(p, String(weeks[w]));
       if (entry && !entry.week.is_bye) { raw += entry.points; played++; }
     }
     if (played) candidates.push({ p: p, raw: raw });
+    else seen.noProjection++;
   }
+  seen.free = candidates.length;
   candidates.sort(function (a, b) { return b.raw - a.raw; });
   candidates = candidates.slice(0, WAIVER_LIMIT);
 
@@ -3862,18 +3911,33 @@ function renderWaivers() {
     }
   }
 
-  if (!rows.length) {
-    host.innerHTML = '<div class="empty">Nobody available improves your lineup over '
-      + 'this horizon. That is a real answer, not an empty table — your starters are '
-      + 'already better than anything on the wire.</div>';
-    note.textContent = '';
-    return;
-  }
   rows.sort(function (a, b) { return b.gain - a.gain; });
+  var improving = rows.length;
   rows = rows.slice(0, 40);
 
+  /* THE SHORT-LIST IS NOT A BROKEN LIST, and the page has to prove it. When only two or
+     three players clear the bar the honest reading is "your lineup is already good",
+     but that is indistinguishable from a failed import until you can see the best
+     available men and confirm they are real players you recognise. So the best of the
+     rest is printed underneath, explicitly marked as adding nothing. */
+  var passed = [];
+  for (var pv = 0; pv < candidates.length && passed.length < 10; pv++) {
+    var cand = candidates[pv].p;
+    var already = false;
+    for (var rr = 0; rr < rows.length; rr++) {
+      if (rows[rr].p.gsis_id === cand.gsis_id) { already = true; break; }
+    }
+    if (!already) passed.push(candidates[pv]);
+  }
+
   var label = horizon === 1 ? 'this week' : 'over ' + weeks.length + ' weeks';
-  var html = '<table><thead><tr><th>#</th><th class="l">Player</th>'
+  var html = '';
+  if (!rows.length) {
+    html = '<div class="empty">Nobody on the wire improves your lineup over this '
+      + 'horizon — your starters are already better than anything available. The pool '
+      + 'is listed below so you can confirm that is what it looks like.</div>';
+  } else {
+  html = '<table><thead><tr><th>#</th><th class="l">Player</th>'
     + '<th>Points added ' + esc(label) + '</th><th>Weeks he starts</th>'
     + '<th>This week</th><th class="l">Why</th></tr></thead><tbody>';
   for (var k = 0; k < rows.length; k++) {
@@ -3895,8 +3959,39 @@ function renderWaivers() {
           : '<span class="slot">—</span>') + '</td>'
       + '<td class="l">' + why + '</td></tr>';
   }
-  host.innerHTML = html + '</tbody></table>';
-  note.innerHTML = '<b>“Points added” is what he adds to your starting lineup</b>, not '
+  html += '</tbody></table>';
+  }
+
+  if (passed.length) {
+    html += '<div class="note" style="margin-top:14px"><b>Best available who would '
+      + '<i>not</i> crack your lineup</b> — shown so you can see the pool is real:</div>'
+      + '<table><thead><tr><th class="l">Player</th><th>He projects</th>'
+      + '<th class="l">Why he adds nothing</th></tr></thead><tbody>';
+    for (var pz = 0; pz < passed.length; pz++) {
+      var fa = passed[pz].p;
+      html += '<tr><td class="l who"' + teamStyle(fa.team) + '>' + avatar(fa)
+        + chip(fa.position) + esc(fa.name) + ' ' + teamBadge(fa.team) + '</td>'
+        + '<td>' + passed[pz].raw.toFixed(1) + '</td>'
+        + '<td class="l"><span class="slot">your ' + fa.position
+        + ' starters already beat him every week</span></td></tr>';
+    }
+    html += '</tbody></table>';
+  }
+  host.innerHTML = html;
+  note.innerHTML = '<b>Where this list came from.</b> ' + seen.pool.toLocaleString()
+    + ' players in the build; ' + seen.mine + ' are yours; '
+    + (LEAGUE && LEAGUE.teams
+        ? seen.owned.toLocaleString() + ' are rostered by the other '
+          + (LEAGUE.teams.length - 1) + ' teams'
+        : 'no league imported, so nobody is excluded as owned')
+    + '; ' + seen.free.toLocaleString() + ' free agents have a projection over these '
+    + weeks.length + ' weeks. Of the top ' + Math.min(WAIVER_LIMIT, seen.free)
+    + ' by raw points, <b>' + improving + '</b> improve your starting lineup.'
+    + (LEAGUE && LEAGUE.unresolved
+        ? ' <b>Caution: ' + LEAGUE.unresolved + ' rostered players could not be matched '
+          + 'to our data</b>, so they are NOT excluded and may be showing as available.'
+        : '')
+    + '<br><br><b>“Points added” is what he adds to your starting lineup</b>, not '
     + 'what he scores. A 12-point receiver is worth nothing to you if your worst '
     + 'starting receiver already projects 12 — and a modest tight end is worth six a '
     + 'week if you are starting nobody there. That is why this list will not match the '
@@ -5082,6 +5177,19 @@ function renderWinners() {
   if (!DRAFT_HIST || !DRAFT_HIST.winners) { host.innerHTML = ''; note.innerHTML = ''; return; }
   var w = DRAFT_HIST.winners;
 
+  /* The season span in the heading is written from the data, because the hardcoded one
+     said "2019-2025" for a study that now runs fourteen seasons — a label nobody thinks
+     to update is a label that lies. */
+  var span = document.getElementById('draftWinnersSpan');
+  if (span && DRAFT_HIST.seasons) {
+    var drafts = 0, boards = DRAFT_HIST.boards || {}, bk;
+    for (bk in boards) {
+      if (boards.hasOwnProperty(bk)) drafts += (boards[bk].drafts || 0);
+    }
+    span.innerHTML = 'measured on ' + drafts.toLocaleString() + ' real drafts, '
+      + DRAFT_HIST.seasons.join('–');
+  }
+
   /* SEPARATION IS DECIDED HERE, NOT BY EYE, and the reference is the LEAGUE AVERAGE
      rather than the best row above it. In a twelve-team league every team finishes 6.50
      on average by construction, so "does this opening beat an average team?" is the
@@ -5324,6 +5432,14 @@ function renderDuels() {
     var dd = DRAFT_HIST.duels[q];
     if (dd.separated) settled.push(dd.winner + ' over ' + dd.loser);
     else ties++;
+  }
+  /* The heading counted three arguments and called them settled. There are five and one
+     is settled. Count it rather than write it. */
+  var dspan = document.getElementById('draftDuelsSpan');
+  if (dspan) {
+    dspan.innerHTML = settled.length
+      ? settled.length + ' of ' + DRAFT_HIST.duels.length + ' actually separate'
+      : 'all ' + DRAFT_HIST.duels.length + ' come out level';
   }
   var seasons = (DRAFT_HIST.winners && DRAFT_HIST.winners.seasons) || '';
   note.innerHTML = '<b>Read the last column first.</b> '
