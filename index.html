@@ -743,8 +743,15 @@
 
   <section class="view" id="view-waivers" hidden>
     <div class="card">
-      <h2>Who is worth picking up</h2>
+      <h2>Who is available</h2>
       <div class="row" style="align-items:flex-end;margin-bottom:10px">
+        <div>
+          <label for="wsort">Rank by</label>
+          <select id="wsort">
+            <option value="points" selected>Projected points</option>
+            <option value="gain">What he adds to your lineup</option>
+          </select>
+        </div>
         <div>
           <label for="wpos">Position</label>
           <select id="wpos">
@@ -3890,7 +3897,27 @@ function renderWaivers() {
       var entry = entryFor(p, String(weeks[w]));
       if (entry && !entry.week.is_bye) { raw += entry.points; played++; }
     }
-    if (played) candidates.push({ p: p, raw: raw });
+    /* WHETHER THE MARKET WILL PROJECT HIM AT ALL is the signal that keeps this board
+       honest, and it is already in the data: `sources` holds only our own model for a
+       player Sleeper and ESPN both decline to price.
+
+       That decline is information about playing time. Summing a weekly projection over
+       a horizon assumes he plays every week, and for a third-string quarterback that is
+       nonsense — Chris Oladokun projects 9 points a week against 3.2 expected games all
+       season, which summed to 39 and ranked him third on the entire board. Every one of
+       the eight worst offenders was a backup quarterback nobody else prices.
+
+       Availability weighting by exp_games was tried first and rejected: it fixed the
+       backups and promoted every KICKER to the top instead, because kickers never miss
+       a game. It also marked genuine starters down. Market coverage is the surgical
+       version of the same idea and touches nothing else. */
+    var market = false;
+    for (var mw = 0; mw < weeks.length; mw++) {
+      var me = entryFor(p, String(weeks[mw]));
+      if (me && me.week.sources && me.week.sources.length > 1) { market = true; break; }
+    }
+    var share = p.exp_games ? Math.min(1, p.exp_games / DATA.weeks.length) : 1;
+    if (played) candidates.push({ p: p, raw: raw, market: market, share: share });
     else seen.noProjection++;
   }
   seen.free = candidates.length;
@@ -3924,14 +3951,29 @@ function renderWaivers() {
       if (w3 === 0) firstWeekGain = delta;
       gain += delta;
     }
-    if (gain > 0.05) {
-      rows.push({ p: player, gain: gain, starts: starts, first: firstWeekGain,
-                  raw: candidates[c].raw, weeks: weeks.length });
-    }
+    /* EVERY available player is kept, not only the ones who improve the lineup.
+       Filtering to improvers turned this into a recommendation list, and a
+       recommendation list ranked by lineup gain puts streaming defences on top —
+       JAX DST led a real roster's board at +6.2 over four weeks, which is an
+       artefact of swapping a defence every week rather than a pickup anybody
+       would spend a claim on. Lineup gain is still computed and still shown; it
+       just no longer decides the order or the membership. */
+    rows.push({ p: player, gain: gain, starts: starts, first: firstWeekGain,
+                raw: candidates[c].raw, market: candidates[c].market,
+                share: candidates[c].share, weeks: weeks.length });
   }
 
-  rows.sort(function (a, b) { return b.gain - a.gain; });
-  var improving = rows.length;
+  var improving = 0;
+  for (var im = 0; im < rows.length; im++) if (rows[im].gain > 0.05) improving++;
+  var sortBy = document.getElementById('wsort').value;
+  /* Two tiers, then points inside each. Players the market refuses to price are not
+     hidden — deep leagues need them — but they do not get to lead a board. */
+  rows.sort(sortBy === 'gain'
+    ? function (a, b) { return b.gain - a.gain; }
+    : function (a, b) {
+        if (a.market !== b.market) return a.market ? -1 : 1;
+        return b.raw - a.raw;
+      });
   rows = rows.slice(0, 40);
 
   /* THE SHORT-LIST IS NOT A BROKEN LIST, and the page has to prove it. When only two or
@@ -3957,25 +3999,42 @@ function renderWaivers() {
       + 'is listed below so you can confirm that is what it looks like.</div>';
   } else {
   html = '<table><thead><tr><th>#</th><th class="l">Player</th>'
-    + '<th>Points added ' + esc(label) + '</th><th>Weeks he starts</th>'
-    + '<th>This week</th><th class="l">Why</th></tr></thead><tbody>';
+    + '<th>Projected ' + esc(label) + '</th><th>Adds to your lineup</th>'
+    + '<th>Weeks he starts</th><th class="l">Note</th></tr></thead><tbody>';
   for (var k = 0; k < rows.length; k++) {
     var row = rows[k];
-    var why = row.starts === 0
-      ? '<span class="slot">bench depth only</span>'
+    /* A note about the player, not an instruction about your roster. */
+    var why = row.gain <= 0.05
+      ? '<span class="slot">your starters already beat him</span>'
       : row.starts === row.weeks
-        ? '<span class="tag good">starts every week</span>'
-        : '<span class="tag">starts ' + row.starts + ' of ' + row.weeks + '</span>';
-    if (row.first <= 0.01 && row.starts) {
-      why += ' <span class="slot">not this week — later</span>';
+        ? '<span class="tag good">would start every week</span>'
+        : '<span class="tag">would start ' + row.starts + ' of ' + row.weeks + '</span>';
+    if (!row.market) {
+      why += ' <span class="tag warn" title="Neither Sleeper nor ESPN publishes a '
+        + 'projection for him. That is usually the market saying he is behind someone '
+        + 'on the depth chart; our model projects him from his own history and cannot '
+        + 'see that.">no market projection</span>';
+    }
+    if (row.p.position === 'DST' || row.p.position === 'K') {
+      /* Said on the row rather than in a footnote, because the footnote is exactly
+         what nobody read when defences were topping this table. */
+      why += ' <span class="slot">streamed weekly — judge on this week</span>';
     }
     html += '<tr>' + rankCell(k + 1)
       + '<td class="l who"' + teamStyle(row.p.team) + '>' + avatar(row.p)
-      + chip(row.p.position) + esc(row.p.name) + ' ' + teamBadge(row.p.team) + '</td>'
-      + '<td><b>+' + row.gain.toFixed(1) + '</b></td>'
-      + '<td>' + row.starts + '</td>'
-      + '<td>' + (row.first > 0.01 ? '+' + row.first.toFixed(1)
+      + chip(row.p.position) + esc(row.p.name) + ' ' + teamBadge(row.p.team)
+      + injuryFlag(row.p) + '</td>'
+      + '<td><b>' + row.raw.toFixed(1) + '</b>'
+          + (row.share < 0.75
+              ? ' <span class="slot" title="Expected to play '
+                + (row.p.exp_games || 0).toFixed(1) + ' of ' + DATA.weeks.length
+                + ' games, so this total assumes more availability than he has">'
+                + Math.round(row.share * 100) + '% avail</span>'
+              : '') + '</td>'
+      + '<td>' + (row.gain > 0.05
+          ? '<span class="up">+' + row.gain.toFixed(1) + '</span>'
           : '<span class="slot">—</span>') + '</td>'
+      + '<td>' + (row.gain > 0.05 ? row.starts : '<span class="slot">—</span>') + '</td>'
       + '<td class="l">' + why + '</td></tr>';
   }
   html += '</tbody></table>';
@@ -4010,12 +4069,17 @@ function renderWaivers() {
         ? ' <b>Caution: ' + LEAGUE.unresolved + ' rostered players could not be matched '
           + 'to our data</b>, so they are NOT excluded and may be showing as available.'
         : '')
-    + '<br><br><b>“Points added” is what he adds to your starting lineup</b>, not '
-    + 'what he scores. A 12-point receiver is worth nothing to you if your worst '
-    + 'starting receiver already projects 12 — and a modest tight end is worth six a '
-    + 'week if you are starting nobody there. That is why this list will not match the '
-    + 'waiver rankings elsewhere, and why it is the one worth acting on. Computed by '
-    + 're-running your optimal lineup with each player added.';
+    + '<br><br><b>Ranked by projected points — this is a board, not a recommendation.</b> '
+    + '<i>Adds to your lineup</i> is the separate question of what he would be worth to '
+    + '<i>you</i>, computed by re-running your optimal lineup with him added: a 12-point '
+    + 'receiver adds nothing if your worst starting receiver already projects 12. Both '
+    + 'are shown because they answer different things and neither should be hidden — '
+    + 'switch <i>Rank by</i> to sort on lineup value instead.'
+    + '<br><br><b>Kickers and defences are streamed, so read them on this week only.</b> '
+    + 'Sorted by lineup value over four weeks a defence can top the board, because the '
+    + 'optimiser assumes you swap to the best one every week — that is an artefact of '
+    + 'weekly streaming, not a pickup worth a claim. It is why this list ranks on points '
+    + 'by default.';
 }
 
 function renderRoster() {
@@ -5899,6 +5963,7 @@ var ON_CHANGE = {
   rankpos:   renderRankings,
   wpos:      renderWaivers,
   whorizon:  renderWaivers,
+  wsort:     renderWaivers,
   seasonpos: renderLines,
   seasonstat: renderLines,
   rankhorizon: renderRankings,
