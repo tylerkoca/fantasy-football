@@ -1469,6 +1469,7 @@ function flags(entry) {
   if (w.spread && w.spread >= 4) {
     out += ' <span class="tag">sources differ ' + w.spread.toFixed(1) + '</span>';
   }
+  out += marketFlag(entry);
   out += watchFlags(entry.player);
   out += redzoneFlag(entry.player);
   return out;
@@ -1516,6 +1517,27 @@ function injuryFlag(player) {
 /* Does this man count as startable at all? Only a HARD status removes him. */
 function unavailable(player) {
   return !!(player && player.injury && player.injury.severity === 'hard');
+}
+
+/* DOES ANY MARKET SOURCE PRICE HIM? `sources` holds our own model plus whichever of
+   Sleeper and ESPN published a number, so a length of one means both declined. That
+   refusal is information the projection itself cannot carry: our model reads a man's
+   own history and has no way to know he is second on a depth chart, while Sleeper and
+   ESPN simply do not publish a line for backups. Used to order boards and to badge, and
+   deliberately never to change a projection — it is evidence about playing time, not a
+   measured multiplier, and this pipeline does not invent those. */
+function marketBacked(entry) {
+  var sources = entry && entry.week && entry.week.sources;
+  return !!(sources && sources.length > 1);
+}
+
+function marketFlag(entry) {
+  if (marketBacked(entry)) return '';
+  return ' <span class="tag warn" title="Neither Sleeper nor ESPN publishes a projection '
+    + 'for him, which usually means the market has him behind someone on the depth '
+    + 'chart. Our model projects him from his own history and cannot see that, so he is '
+    + 'sorted below everyone the market does price. The number beside him is unchanged.">'
+    + 'no market projection</span>';
 }
 
 function redzoneFlag(player) {
@@ -2801,7 +2823,22 @@ function renderWeeklyRankings() {
     if (!entry || entry.week.is_bye) continue;
     rows.push(entry);
   }
-  rows.sort(function (a, b) { return b.points - a.points; });
+  /* A WEEKLY BOARD CANNOT USE EXPECTED GAMES, so it needs the other signal.
+     The season board multiplies a per-game rate by expected games, which is why Easton
+     Stick correctly lands at QB41 there — 16.0 a game across 4.8 games. One week is one
+     week, that correction has nowhere to go, and the same man ranked 16th weekly, ahead
+     of Bo Nix and Mahomes.
+
+     What separates him is that neither Sleeper nor ESPN will project him at all, which
+     is the market saying he is behind somebody. Measured across every position, ZERO
+     own-model-only players fall inside the startable range of a weekly board, so sorting
+     them below costs no genuine starter his place. They stay on the board and are
+     badged, because a rookie the market has not priced yet is a real player. */
+  rows.sort(function (a, b) {
+    var am = marketBacked(a), bm = marketBacked(b);
+    if (am !== bm) return am ? -1 : 1;
+    return b.points - a.points;
+  });
   rows = rows.slice(0, limit);
   setBandScale(rows);
   var showWhy = document.getElementById('showwhy').checked;
