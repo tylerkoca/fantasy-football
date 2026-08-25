@@ -4,6 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fantasy Football — Start/Sit</title>
+<!--
+  SHARING METADATA. Without these a link posted anywhere renders as a bare URL with no
+  description, which is most of what decides whether a stranger clicks it. `SITE_URL` in
+  build.py rewrites the two absolute URLs below when the site is emitted, so they follow
+  a custom domain rather than being pinned to the github.io host.
+
+  Deliberately no og:image yet: a preview card needs a real designed asset, and pointing
+  at one that does not exist renders worse than pointing at nothing at all.
+-->
+<meta name="description" content="Weekly start/sit, waivers and trades for any league's scoring, built from a projection model that is backtested against the market and says where it loses. No signup — your roster stays in your browser.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Fantasy Football Projections">
+<meta property="og:title" content="Fantasy Football — start/sit, waivers and trades, measured">
+<meta property="og:description" content="Projections blended from three sources with fitted weights, waivers ranked by what they add to YOUR lineup, and a draft backtest over 27,877 real drafts. Every claim carries its error bar.">
+<meta property="og:url" content="https://tylerkoca.github.io/fantasy-football/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Fantasy Football — start/sit, waivers and trades, measured">
+<meta name="twitter:description" content="Blended projections, waivers ranked by lineup gain, and a draft backtest over 27,877 real drafts. No signup; your roster never leaves your browser.">
+<link rel="canonical" href="https://tylerkoca.github.io/fantasy-football/">
 <style>
   /*
    * TWO COLOUR SYSTEMS, doing different jobs. Do not let them bleed into each other.
