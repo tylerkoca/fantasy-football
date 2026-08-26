@@ -440,6 +440,47 @@
   .slotmoves .slot { flex-basis: 100%; }
   .slotmove { display: inline-flex; align-items: baseline; gap: 5px; font-size: 14px;
               font-variant-numeric: tabular-nums; }
+  /* ---- Report card -------------------------------------------------------
+     The letter is the loudest thing on the page and it is the LEAST informative
+     thing in the card, so everything that gives it meaning — the rank it stands
+     for, the field it was ranked in, and what that rank was historically worth —
+     sits immediately beside it at reading size rather than below the fold. The
+     badge colour is decoration: the letter and the rank are always written. */
+  .report { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+  .report .badge {
+    width: 104px; height: 104px; border-radius: 50%; flex: none;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    /* DARKENED, and the amber is why. The status hues are tuned to be read as ink on a
+       card, not as a fill behind white text: white on --warn #fab219 is 1.85:1, which
+       is unreadable at any size, and this is the largest thing on the tab. Mixed to 60%
+       with black the worst of the four clears 4.77:1, enough for the 9px caption as
+       well as the letter. The undiluted hue survives in the glow below, so the badge
+       still reads as amber. */
+    background: linear-gradient(150deg,
+      color-mix(in srgb, var(--grade) 60%, #000),
+      color-mix(in srgb, var(--grade) 36%, #000));
+    box-shadow: 0 6px 18px color-mix(in srgb, var(--grade) 35%, transparent);
+    color: #fff;
+  }
+  .report .badge b {
+    font-size: 38px; font-weight: 850; letter-spacing: -1.5px; line-height: 1;
+  }
+  .report .badge span {
+    font-size: 9px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+    margin-top: 5px; opacity: .92;
+  }
+  .report .lede { flex: 1 1 300px; font-size: 15px; line-height: 1.5; }
+  .report .lede .big { font-size: 20px; font-weight: 750; display: block;
+                       margin-bottom: 3px; }
+  /* Strengths and weaknesses, ESPN's one genuinely good idea here: a manager wants to
+     know where to spend a waiver claim before they want a table. */
+  .swrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+           padding: 9px 0; border-top: 1px solid var(--line-soft); }
+  .swrow > b { font-size: 12px; min-width: 96px; color: var(--dim);
+               text-transform: uppercase; letter-spacing: .7px; }
+  .swrow .chip { margin-right: 0; }
+  .gradecell { font-weight: 800; letter-spacing: -.3px; }
+
   /* Both sides of a market, stacked so the column stays narrow. Tabular figures keep
      the two prices aligned under each other. */
   .odds { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
@@ -849,6 +890,13 @@
   </section>
 
   <section class="view" id="view-draft" hidden>
+    <div class="card">
+      <h2>Your report card
+        <span class="tag">your league, your scoring</span></h2>
+      <div id="reportGrade"></div>
+      <div id="reportSlots"></div>
+      <div class="note" id="reportNote"></div>
+    </div>
     <div class="card">
       <h2>Your draft plan</h2>
       <div class="row" style="align-items:flex-end">
@@ -5132,6 +5180,364 @@ var DRAFT_HIST = (DATA.facts && DATA.facts.draft_history) || null;
 
 function pct(value) { return (value * 100).toFixed(1) + '%'; }
 
+/* ------------------------------------------------------------------ *
+ * The report card.
+ *
+ * Every fantasy site grades your draft and none of them says what the letter means.
+ * That is the part worth taking seriously, so this one is defined twice over — once as
+ * a construction and once as a measurement — and both halves are printed.
+ *
+ * AS A CONSTRUCTION, the letter is a RANK IN YOUR OWN LEAGUE and nothing else: your
+ * roster's projected lineup points over the rest of the season, under YOUR scoring and
+ * YOUR slots, against the same number for every other team in the league you imported.
+ * That is why the card needs an import and refuses to draw without one — a grade
+ * against an imagined field is a grade against nobody. Lineup points rather than raw
+ * points, for the reason the Trades tab is built on: a sixth running back cannot start,
+ * so he is not value.
+ *
+ * AS A MEASUREMENT, history.py graded fourteen seasons of real drafts the same way —
+ * rank the room by draft-day value, then look at where each rank actually finished —
+ * and `GRADES` is that calibration table. It is why this card can say what an A was
+ * historically worth instead of implying it. The headline it carries is deflationary
+ * and stays on the card: best grade to worst is about a place and a bit of finishing
+ * position out of eleven.
+ *
+ * Nothing here is written into the prose. `calibration` reads its sentences off the
+ * fixture on every render, for the reason the draft tab's other notes do: the old
+ * hardcoded conclusion survived a data change that should have killed it.
+ * ------------------------------------------------------------------ */
+var GRADES = (DRAFT_HIST && DRAFT_HIST.grades) || null;
+
+/* The scale lives in the fixture, so the letters on the card and the letters the study
+   calibrated cannot drift apart. Exact at twelve teams — twelve letters, twelve seats —
+   and interpolated by share of field at any other size, which is what makes an
+   eight-team A and a fourteen-team A the same statement. */
+function gradeLetter(rank, teams) {
+  var letters = GRADES && GRADES.letters;
+  if (!letters || !letters.length || teams < 2) return null;
+  var index = Math.round(((rank - 1) / (teams - 1)) * (letters.length - 1));
+  return letters[Math.max(0, Math.min(letters.length - 1, index))];
+}
+
+/* Green through amber to red across the field. Decoration only: the letter, the rank
+   and the field size are all written out beside it. */
+function gradeHue(rank, teams) {
+  var share = teams > 1 ? (rank - 1) / (teams - 1) : 0;
+  if (share <= 0.25) return 'var(--good)';
+  if (share <= 0.5) return 'var(--accent)';
+  if (share <= 0.75) return 'var(--warn)';
+  return 'var(--critical)';
+}
+
+/* Which of the imported league's teams is yours. The explicit pick comes first; the
+   roster match is there for a league imported before the team was chosen, and returns
+   -1 rather than guessing when nothing matches. */
+function myTeamIndex() {
+  if (!LEAGUE || !LEAGUE.teams) return -1;
+  if (state.leagueTeam !== undefined && LEAGUE.teams[state.leagueTeam]) {
+    return state.leagueTeam;
+  }
+  for (var t = 0; t < LEAGUE.teams.length; t++) {
+    var ids = LEAGUE.teams[t].players || [];
+    if (!ids.length || ids.length !== state.roster.length) continue;
+    var same = true;
+    for (var i = 0; i < ids.length; i++) {
+      if (state.roster.indexOf(ids[i]) < 0) { same = false; break; }
+    }
+    if (same) return t;
+  }
+  return -1;
+}
+
+/* WHAT A BENCH IS WORTH, and it is not the points sitting on it.
+   A reserve is only worth what he beats the wire by, because the alternative to
+   rostering him is a waiver claim, not an empty slot. Everyone past the number this
+   league can start at his position is counted — those are the men who exist for a bye
+   or an injury — against the same replacement-level probe the Trades tab measures
+   thinness with. A bench of nine players nobody else wanted scores zero here, which is
+   the honest answer and the one a raw points total cannot give. */
+function benchDepth(ids, weeks) {
+  var depth = rosterDepth(ids, weeks), total = 0;
+  for (var i = 0; i < TRADE_POSITIONS.length; i++) {
+    var position = TRADE_POSITIONS[i];
+    if (!slotsAllow(position)) continue;
+    var probe = positionProbe(position, weeks);
+    if (!probe) continue;
+    var wire = rawOverWeeks(probe, weeks);
+    var starters = state.slots[position] || 0;
+    if (FLEX_OK[position]) starters += state.slots.FLEX || 0;
+    if (SUPERFLEX_OK[position]) starters += state.slots.SUPERFLEX || 0;
+    var list = depth[position] || [];
+    for (var j = starters; j < list.length; j++) {
+      if (list[j] > wire) total += list[j] - wire;
+    }
+  }
+  return total;
+}
+
+/* One squad, measured every way the card reports. */
+function reportSquad(ids, name, isMine, weeks) {
+  var split = squadBySlot(ids, weeks);
+  return { name: name, mine: isMine, bySlot: split.bySlot, total: split.total,
+           bench: benchDepth(ids, weeks) };
+}
+
+function rankAmong(values, value) {
+  var rank = 1;
+  for (var i = 0; i < values.length; i++) if (values[i] > value) rank++;
+  return rank;
+}
+
+function median(values) {
+  var sorted = values.slice().sort(function (a, b) { return a - b; });
+  if (!sorted.length) return 0;
+  var mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/* One optimiser pass per team per remaining week, which is the same order of work the
+   Trades tab does and far too much to repeat on every keystroke in the scoring editor.
+   Keyed on everything that can move a number and nothing that cannot. */
+var reportMemo = { key: null, value: null };
+
+function draftReport() {
+  if (!LEAGUE || !LEAGUE.teams || !LEAGUE.teams.length || !state.roster.length) {
+    return null;
+  }
+  var mine = myTeamIndex();
+  var key = state.roster.join(',') + '|' + scoringKey() + '|' + mine
+    + '|' + LEAGUE.teams.length;
+  if (reportMemo.key === key) return reportMemo.value;
+
+  var weeks = remainingWeeks(), squads = [], t;
+  for (t = 0; t < LEAGUE.teams.length; t++) {
+    if (t === mine) continue;
+    var ids = LEAGUE.teams[t].players || [];
+    if (!ids.length) continue;
+    squads.push(reportSquad(ids, LEAGUE.teams[t].name, false, weeks));
+  }
+  var own = reportSquad(state.roster, 'Your team', true, weeks);
+  squads.push(own);
+
+  var totals = [], i;
+  for (i = 0; i < squads.length; i++) totals.push(squads[i].total);
+  var teams = squads.length;
+
+  /* One row per slot GROUP — the two running-back slots report together, because the
+     optimiser is free to shuffle who sits in which and pretending otherwise would
+     invent a distinction. Bench rides along as a row of its own on a different
+     measurement, which the column header says. */
+  var groups = [], seen = {}, slots = slotList();
+  for (i = 0; i < slots.length; i++) {
+    if (!seen[slots[i]]) { seen[slots[i]] = true; groups.push(slots[i]); }
+  }
+  var rows = [];
+  for (i = 0; i < groups.length; i++) {
+    var group = groups[i], values = [];
+    for (t = 0; t < squads.length; t++) values.push(squads[t].bySlot[group] || 0);
+    var value = own.bySlot[group] || 0, rank = rankAmong(values, value);
+    rows.push({ slot: group, points: value, rank: rank,
+                letter: gradeLetter(rank, teams),
+                median: median(values), best: Math.max.apply(null, values) });
+  }
+  var benches = [];
+  for (t = 0; t < squads.length; t++) benches.push(squads[t].bench);
+  var benchRank = rankAmong(benches, own.bench);
+  rows.push({ slot: 'BENCH', points: own.bench, rank: benchRank,
+              letter: gradeLetter(benchRank, teams), median: median(benches),
+              best: Math.max.apply(null, benches), depth: true });
+
+  var rank = rankAmong(totals, own.total);
+  var best = null;
+  for (t = 0; t < squads.length; t++) {
+    if (!best || squads[t].total > best.total) best = squads[t];
+  }
+  reportMemo = { key: key, value: {
+    teams: teams, weeks: weeks.length, rank: rank, letter: gradeLetter(rank, teams),
+    total: own.total, median: median(totals), best: best,
+    unnamed: mine < 0, rows: rows
+  } };
+  return reportMemo.value;
+}
+
+/* "a A+" and "a F" both read as typos, and both are reachable — A+ whenever the reader
+   tops their league and F whenever they are last, which are the two people most likely
+   to look. A and F are the letters that take "an". */
+function article(letter) {
+  return 'AF'.indexOf(String(letter).charAt(0)) >= 0 ? 'an' : 'a';
+}
+
+/* WHAT THE LETTER WAS HISTORICALLY WORTH — read off the fixture, never written here.
+
+   Two sentences that a reader deserves next to a grade and never gets: what teams
+   holding this grade actually did, and how much the grade separates at all. The second
+   is the one that matters, and on the current fixture it is deflationary — which is
+   exactly why it is derived rather than composed, so it can change when the measurement
+   does. */
+function calibration(letter) {
+  if (!GRADES || !GRADES.rows || !GRADES.rows.length) return '';
+  var rows = GRADES.rows, i, row = null;
+  for (i = 0; i < rows.length; i++) if (rows[i].letter === letter) row = rows[i];
+  var top = rows[0], bottom = rows[rows.length - 1];
+  var field = GRADES.teams || 12;
+  var parts = [];
+
+  if (row) {
+    parts.push('<b>What ' + article(letter) + ' ' + esc(letter)
+      + ' has been worth.</b> Across '
+      + (rows.length * row.n).toLocaleString() + ' graded rosters drawn from '
+      + (GRADES.seasons || 14) + ' years of real drafts, rosters ranked '
+      + row.rank + (row.rank === 1 ? 'st' : row.rank === 2 ? 'nd'
+        : row.rank === 3 ? 'rd' : 'th')
+      + ' of ' + field + ' on draft day finished <b>' + row.avg_finish.toFixed(2)
+      + '</b> on average — the field averages '
+      + (GRADES.baseline_finish || 6.5).toFixed(2) + ' — and won the league '
+      + pct(row.title_rate) + ' of the time against '
+      + pct(GRADES.baseline_title || 1 / field) + ' for a coin flip.');
+  }
+
+  /* HOW FLAT THE TOP IS, derived. Every grade whose average finish sits within two
+     standard errors of the best one is telling you the same thing, and on the current
+     data that is most of the top half. Counting them here rather than asserting a
+     number means the sentence follows the fixture. */
+  var flat = 0;
+  for (i = 0; i < rows.length; i++) {
+    var bar = 2 * Math.sqrt(rows[i].spread * rows[i].spread + top.spread * top.spread);
+    if (Math.abs(rows[i].avg_finish - top.avg_finish) <= bar) flat++;
+    else break;
+  }
+  parts.push('<b>How much the grade separates.</b> Best to worst is '
+    + GRADES.gap.toFixed(2) + ' of a finishing place out of ' + (field - 1)
+    + ', ± ' + GRADES.gap_bar.toFixed(2) + ', and the rank correlation between a '
+    + 'draft-day grade and where a team actually finished is <b>'
+    + GRADES.rho.toFixed(3) + '</b> ± ' + (2 * GRADES.rho_stderr).toFixed(3) + '. '
+    + (flat > 1
+        ? 'The top ' + flat + ' grades (' + esc(top.letter) + ' through '
+          + esc(rows[flat - 1].letter) + ') are inside each other’s error bars, so what '
+          + 'separation there is sits between the bottom of the field and everyone '
+          + 'else, not between ' + esc(top.letter) + ' and '
+          + esc(rows[flat - 1].letter) + '. '
+        : '')
+    + article(bottom.letter).charAt(0).toUpperCase() + article(bottom.letter).slice(1)
+    + ' ' + esc(bottom.letter) + ' roster still won ' + pct(bottom.title_rate)
+    + ' of the time. The grade is a lean, not a season.');
+  return parts.join('<br><br>');
+}
+
+function renderReportCard() {
+  var host = document.getElementById('reportGrade');
+  var slotHost = document.getElementById('reportSlots');
+  var note = document.getElementById('reportNote');
+  slotHost.innerHTML = '';
+  note.innerHTML = '';
+
+  if (!LEAGUE || !LEAGUE.teams || !LEAGUE.teams.length) {
+    host.innerHTML = '<div class="empty">A grade is a rank among your actual '
+      + 'opponents, so this needs them. Import your league on the <b>Roster</b> tab '
+      + 'and it fills in.</div>';
+    return;
+  }
+  if (!state.roster.length) {
+    host.innerHTML = '<div class="empty">League imported. Pick which team is yours on '
+      + 'the <b>Roster</b> tab.</div>';
+    return;
+  }
+  var report = draftReport();
+  if (!report) { host.innerHTML = '<div class="empty">Nothing to grade yet.</div>'; return; }
+  if (!report.letter) {
+    host.innerHTML = '<div class="empty">Ranked <b>' + report.rank + '</b> of '
+      + report.teams + ' — but fixtures/draft_history.json carries no grade scale in '
+      + 'this build, so there is no letter to put on it. Run '
+      + '<code>history.py --generate</code>.</div>';
+    return;
+  }
+
+  var gap = report.total - report.median;
+  host.innerHTML = '<div class="report">'
+    + '<div class="badge" style="--grade:' + gradeHue(report.rank, report.teams) + '">'
+    + '<b>' + esc(report.letter) + '</b><span>Your grade</span></div>'
+    + '<div class="lede"><span class="big">' + report.rank + ' of ' + report.teams
+    + ' in your league</span>'
+    + 'Your best lineup projects <b>' + report.total.toFixed(0) + '</b> points over the '
+    + 'remaining ' + report.weeks + ' week' + (report.weeks === 1 ? '' : 's')
+    + ', ' + (Math.abs(gap) < 1 ? 'level with' : '<b>' + Math.abs(gap).toFixed(0)
+        + '</b> ' + (gap > 0 ? 'ahead of' : 'behind')) + ' the league median'
+    + (report.rank === 1 ? ' — the best roster in the league on these projections.'
+        : ', and ' + (report.best.total - report.total).toFixed(0) + ' behind '
+          + esc(report.best.name) + '.')
+    + '</div></div>';
+
+  /* Strengths and weaknesses in the top and bottom third of the field. A third rather
+     than a fixed rank, so the split means the same thing in an eight-team league as in
+     a fourteen.
+
+     A row must also beat the median to be called a strength, and that guard is not
+     cosmetic: ranks are competition ranks, so when a slot is tied across the league —
+     which BENCH genuinely is in a league where nobody carries anything worth having,
+     every team on zero — all twelve teams rank first and every one of them would be
+     told that slot is a strength. Level with the field is level with the field. */
+  var cut = Math.max(1, Math.round(report.teams / 3));
+  var strong = [], weak = [], i;
+  for (i = 0; i < report.rows.length; i++) {
+    var row = report.rows[i];
+    if (row.rank <= cut && row.points > row.median) strong.push(row);
+    else if (row.rank > report.teams - cut && row.points < row.median) weak.push(row);
+  }
+  function chips(list) {
+    if (!list.length) return '<span class="slot">none — you are mid-pack everywhere</span>';
+    var out = '';
+    for (var c = 0; c < list.length; c++) {
+      out += chip(list[c].slot) + '<span class="slot">' + list[c].rank + '/'
+        + report.teams + '</span>';
+    }
+    return out;
+  }
+  var html = '<div class="swrow"><b>Strengths</b>' + chips(strong) + '</div>'
+    + '<div class="swrow"><b>Weaknesses</b>' + chips(weak) + '</div>';
+
+  html += '<table><thead><tr><th class="l">Slot</th><th>Grade</th><th>Rank</th>'
+    + '<th>Your points</th><th>League median</th><th>Best in league</th>'
+    + '</tr></thead><tbody>';
+  for (i = 0; i < report.rows.length; i++) {
+    var r = report.rows[i];
+    html += '<tr><td class="l">' + chip(r.slot)
+      + (r.depth ? '<span class="slot">over the wire</span>' : '') + '</td>'
+      + '<td class="gradecell" style="color:' + gradeHue(r.rank, report.teams) + '">'
+      + esc(r.letter || '—') + '</td>'
+      + '<td>' + r.rank + '/' + report.teams + '</td>'
+      + '<td><b>' + r.points.toFixed(0) + '</b></td>'
+      + '<td>' + r.median.toFixed(0) + '</td>'
+      + '<td>' + r.best.toFixed(0) + '</td></tr>';
+  }
+  slotHost.innerHTML = html + '</tbody></table>';
+
+  var bits = ['<b>How the grade is built.</b> Your rank among the '
+    + report.teams + ' teams in your league on projected starting-lineup points over '
+    + 'the remaining ' + report.weeks + ' week' + (report.weeks === 1 ? '' : 's')
+    + ', computed under your scoring and your slots — change either on the Settings tab '
+    + 'and every letter here moves. Each slot row is the same ranking restricted to that '
+    + 'slot; <b>BENCH</b> is the one row measured differently, as what your reserves '
+    + 'beat a waiver-wire replacement by, because a bench of players nobody else wanted '
+    + 'is worth nothing however many points it scores.'];
+  if (state.week !== String(DATA.weeks[0])) {
+    bits.push('<b>It is week ' + esc(state.week) + ', so this is not your draft.</b> It '
+      + 'grades the roster as it stands, waivers and trades included.');
+  }
+  if (report.unnamed) {
+    bits.push('<b>Your team was not matched to one in the league.</b> Your roster is '
+      + 'being ranked as a ' + report.teams + 'th entry against all '
+      + LEAGUE.teams.length + ' imported teams — including, probably, a copy of itself — '
+      + 'rather than against the other ' + (LEAGUE.teams.length - 1) + '. Pick your team '
+      + 'on the Roster tab to fix that.');
+  }
+  bits.push(calibration(report.letter));
+  bits.push('<b>What this cannot see.</b> Every team here is graded with the same '
+    + 'projections, so the card measures roster construction, not who is right about '
+    + 'the players. The backtest below found no draft plan that separates from an '
+    + 'auto-draft at all, which is the context this letter belongs in.');
+  note.innerHTML = bits.join('<br><br>');
+}
+
 /* The strategy ranking, from the historical backtest.
 
    This used to report what each strategy COSTS against best-available, because the
@@ -5665,6 +6071,14 @@ function renderCliffs(size, teams) {
 }
 
 function renderDraft() {
+  /* Only while the tab is open, and BEFORE the DRAFT guard below — the report card is
+     built from the league and the projections, not from the draft tables, so a build
+     with --no-draft must still grade a roster. The gate is the one the Trades tab uses
+     and for the same reason: this runs the optimiser once per team per remaining week,
+     and paying that on every keystroke in the scoring editor would make the page feel
+     broken. Opening the tab calls it. */
+  if (currentView === 'draft') renderReportCard();
+
   if (!DRAFT) {
     document.getElementById('draftPlan').innerHTML =
       '<div class="empty">No draft tables in this build.</div>';
@@ -5885,8 +6299,10 @@ document.addEventListener('click', function (event) {
     if (currentView === 'scores') renderScores(false);
     else scheduleScoreRefresh(false);
     // Trades are computed on open for the same reason, but the cost is local: the
-    // optimiser runs hundreds of times to grade a league's worth of swaps.
+    // optimiser runs hundreds of times to grade a league's worth of swaps. The draft
+    // tab's report card is the same trade-off — a league's worth of lineups.
     if (currentView === 'trade') renderTrade();
+    if (currentView === 'draft') renderDraft();
     return;
   }
   if (target.dataset.tradeside) {
