@@ -218,6 +218,12 @@
     border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
     box-shadow: 0 1px 0 color-mix(in srgb, var(--accent) 10%, transparent) inset,
                 0 6px 18px rgba(0,0,0,.10);
+    /* Containing block and clip for the section bar drawn by `.card::before` below.
+       These two lived in a SECOND `.card { }` rule down beside that bar, which read
+       fine and was the same shape as the `.odds` collision that put the price column
+       out of line. `lint_viewer.duplicate_rules` now fails the build on a repeated
+       bare class selector, so the properties come here instead. */
+    position: relative; overflow: hidden;
   }
   #view-startsit { --section: #3987e5; }
   #view-rankings { --section: #7c5cff; }
@@ -273,10 +279,8 @@
     content: ""; width: 4px; height: 15px; border-radius: 2px; flex: none;
     background: var(--section);
   }
-  /* A thin colour bar across the top of each card ties it to its tab. */
-  .card {
-    position: relative; overflow: hidden;
-  }
+  /* A thin colour bar across the top of each card ties it to its tab. It needs
+     `position: relative; overflow: hidden` on `.card`, which is set up there. */
   .card::before {
     content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
     background: linear-gradient(90deg, var(--section),
@@ -503,9 +507,18 @@
   .gradecell { font-weight: 800; letter-spacing: -.3px; }
 
   /* Both sides of a market, stacked so the column stays narrow. Tabular figures keep
-     the two prices aligned under each other. */
-  .odds { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
-          line-height: 1.35; white-space: nowrap; }
+     the two prices aligned under each other, and the cell inherits the table's right
+     alignment like every other number in the row.
+
+     THIS CLASS WAS CALLED `.odds`, which is also the bust/boom component 150 lines up,
+     and that rule sets `display: flex; align-items: center`. Same name, two unrelated
+     components, so the price cell silently became a flex container: its content packed
+     to the cell's LEFT edge while every neighbouring figure sat right, and centring the
+     flex item pulled the pair off the line number's baseline as well. Nothing errored —
+     it just looked wrong, which is the `var HIST` failure mode in CSS. Do not reuse a
+     class name across two components here. */
+  td.price { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
+             line-height: 1.35; white-space: nowrap; text-align: right; }
   /* Workload: opportunity, in the same tabular figures as the projections beside it. */
   .usage { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
            white-space: nowrap; }
@@ -3470,7 +3483,7 @@ function renderLines() {
       + avatar(row.p) + chip(row.p.position) + esc(row.p.name) + ' '
       + teamBadge(row.p.team) + '</td>'
       + '<td><b>' + e.line.toFixed(1) + '</b></td>'
-      + '<td class="odds">' + oddsPair(e) + '</td>'
+      + '<td class="price">' + oddsPair(e) + '</td>'
       + '<td>' + (e.ours === null ? '—' : e.ours.toFixed(0)) + '</td>'
       + '<td>' + (e.pg === null ? '—' : e.pg.toFixed(1)) + '</td></tr>'
       + '<tr class="why"><td colspan="5" class="l">'
