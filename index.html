@@ -202,7 +202,16 @@
   .tab[data-view="roster"]   { --tabhue: #4fc9d8; }
   .tab[data-view="settings"] { --tabhue: #bcc4ce; }
   main { padding: 20px; max-width: 1400px; margin: 0 auto; }
-  .view[hidden] { display: none; }
+  /* THE `hidden` ATTRIBUTE DOES NOT WIN AGAINST A CLASS THAT SETS `display`, and this
+     file has now been bitten by it three times. `[hidden]{display:none}` lives in the
+     UA stylesheet, and ANY author rule beats a UA rule regardless of specificity — so
+     `.row{display:flex}` on an element carrying `hidden` leaves it on screen. It was
+     patched narrowly twice, once as `.view[hidden]` and once by reaching for
+     `style.display` on #whyPick, and #teamPick — also a `.row`, also toggled by the
+     attribute — was missed: a visitor with no league imported saw "Which team is
+     yours?" over an empty dropdown and a live "Use this team" button.
+     One rule, in author scope, ends the whole class of bug. */
+  [hidden] { display: none !important; }
   .row { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
   .card {
     background: var(--panel-tint); border: 1px solid var(--line-soft);
@@ -1014,6 +1023,9 @@
       <div class="note" id="importhelp"></div>
       <div class="note" id="importstatus"></div>
       <div class="row" id="teamPick" hidden style="align-items:flex-end;margin-top:10px">
+        <!-- Full-width, and ABOVE the picker rather than beside it: it exists to stop
+             the controls under it being read as the league you just typed in. -->
+        <div class="note" id="leaguestale" hidden style="flex-basis:100%;margin:0"></div>
         <div>
           <label for="leagueteam">Which team is yours?</label>
           <select id="leagueteam"></select>
@@ -2702,9 +2714,11 @@ function renderWhy() {
   var select = document.getElementById('whyplayer');
   var entries = rosterEntries();
 
-  // style.display, not the `hidden` attribute: .row sets display:flex, and an explicit
-  // display rule beats the UA stylesheet's [hidden]{display:none}, so the empty
-  // dropdown stayed on screen looking broken.
+  // style.display rather than the `hidden` attribute, historically because .row sets
+  // display:flex and an author rule beats the UA stylesheet's [hidden]{display:none},
+  // so the empty dropdown stayed on screen looking broken. The `[hidden]` rule in the
+  // stylesheet now fixes that globally and either mechanism would work; this one stays
+  // because it is not worth churning, not because the attribute is still broken.
   document.getElementById('whyPick').style.display = entries.length ? '' : 'none';
   if (!entries.length) {
     select.innerHTML = '';
@@ -4269,14 +4283,26 @@ function renderRoster() {
  * ------------------------------------------------------------------ */
 var LEAGUE = state.league || DATA.league || null;
 
+/* The import attempt that was refused, or null. Deliberately NOT persisted: it is a
+   fact about what just happened in this session, and a warning about a failed import
+   surviving a reload would outlive the thing it describes. */
+var failedImport = null;
+
 var HELP = {
   sleeper: 'Sleeper: the long number in your league URL — '
     + 'sleeper.com/leagues/<b>1234567890123456</b>/team. No sign-in needed. '
     + 'Pasting the whole URL is fine.',
+  /* "Private leagues work if this browser is already signed in to ESPN" was too
+     confident. Being signed in is necessary and may not be sufficient: the cookie also
+     has to be willing to travel from this origin to espn.com, and ESPN sets SWID with
+     no SameSite attribute, which browsers read as Lax and refuse to send cross-site.
+     Promising it works and then refusing is worse than saying what the catch is. */
   espn: 'ESPN: the leagueId in your league URL — '
     + 'fantasy.espn.com/football/league?leagueId=<b>123456</b>. '
     + 'Pasting the whole URL is fine. '
-    + 'Private leagues work if this browser is already signed in to ESPN.'
+    + 'A private league needs your ESPN login cookie, and a browser will not always '
+    + 'send that across sites — if Import is refused, the error says how to tell '
+    + 'whether you are signed out or whether the cookie is the problem.'
 };
 
 function setStatus(text, kind) {
@@ -4360,9 +4386,13 @@ function importSleeper(id, done) {
 }
 
 function importEspn(id, done) {
+  /* mSettings is not decoration: the success path reads payload.settings.name, and
+     without asking for the view ESPN does not send `settings` at all — so the league
+     name came back "" on every import and the meta line printed "espn · 10 teams" with
+     the name missing. leagues.py had the identical bug and is fixed with it. */
   var url = 'https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/'
     + DATA.season + '/segments/0/leagues/' + encodeURIComponent(id)
-    + '?view=mTeam&view=mRoster';
+    + '?view=mTeam&view=mRoster&view=mSettings';
   /* credentials: 'include' is the whole trick for private leagues — ESPN sends
      Access-Control-Allow-Credentials: true, so a signed-in browser authenticates
      itself and nothing needs pasting. */
@@ -4389,11 +4419,33 @@ function importEspn(id, done) {
     })
     .catch(function (err) {
       if (err === 401 || err === 403) {
-        done('ESPN refused the request. That means the league is private and this '
-           + 'browser is not signed in to ESPN — open fantasy.espn.com, sign in, and '
-           + 'try again. If your browser blocks third-party cookies it will keep '
-           + 'refusing; use the build-time importer in that case '
-           + '(build.py --espn-league ' + esc(String(id)) + ' --espn-cookies …).');
+        /* THIS MESSAGE USED TO SAY "sign in and try again", WHICH IS ADVICE THAT MAY
+           NOT BE ACTIONABLE, and following it can loop forever. A 401 here has two
+           quite different causes and they need opposite responses:
+
+             1. You are signed out of ESPN. Signing in fixes it.
+             2. You ARE signed in, and the cookie cannot travel. ESPN sets SWID with
+                no SameSite attribute, which Chrome treats as SameSite=Lax, and a Lax
+                cookie is never attached to a cross-site fetch. From this page that is
+                unfixable at any amount of signing in.
+
+           So the message no longer guesses. It hands over the one test that separates
+           them: opening the same URL as a normal tab is a FIRST-PARTY request to
+           espn.com, where the cookie attaches whatever its SameSite says. What comes
+           back names the cause. */
+        done('<b>ESPN answered 401 — it does not know who you are.</b> The league is '
+           + 'private, so the request needed your ESPN login cookie and did not carry '
+           + 'one. There are two reasons for that and they need opposite fixes, so '
+           + 'find out which: <a href="' + esc(url) + '" target="_blank" '
+           + 'rel="noopener">open the league on espn.com in this same browser</a>. '
+           + 'That is a first-party request, so your cookie attaches however it is '
+           + 'configured.<br><br><b>If JSON comes back</b> you are signed in, and the '
+           + 'cookie simply cannot cross from this site to espn.com — signing in again '
+           + 'will not change that. Import it at build time instead: '
+           + '<code>build.py --espn-league ' + esc(String(id)) + ' --espn-cookies '
+           + '&lt;file&gt;</code>, where the file holds your espn_s2 and SWID.'
+           + '<br><b>If you get 401 there too</b> you are simply signed out — sign in '
+           + 'at fantasy.espn.com and press Import again.');
       } else if (err === 404) {
         done('No ESPN league ' + esc(String(id)) + ' in ' + DATA.season + '.');
       } else {
@@ -4415,6 +4467,26 @@ function renderLeague() {
   var pick = document.getElementById('teamPick');
   if (!LEAGUE || !LEAGUE.teams || !LEAGUE.teams.length) { pick.hidden = true; return; }
   pick.hidden = false;
+
+  /* A FAILED IMPORT LEAVES THE PREVIOUS LEAGUE ON SCREEN, AND IT LOOKED LIKE SUCCESS.
+     Nothing in the failure path touches `state.league`, which is correct — losing a
+     working league because a re-import was refused would be worse — but it meant a red
+     error sat directly above a populated team picker showing a real team name and team
+     count. The obvious reading is that it half worked, and "Use this team" then quietly
+     loads the OLD roster. So the picker says whose league it is actually showing. */
+  var stale = document.getElementById('leaguestale');
+  if (failedImport) {
+    stale.hidden = false;
+    stale.innerHTML = '<span class="tag bad">not updated</span> Everything below is '
+      + 'your <b>previously imported</b> ' + esc(LEAGUE.platform) + ' league'
+      + (LEAGUE.league_id ? ' (' + esc(LEAGUE.league_id) + ')' : '') + ', '
+      + LEAGUE.teams.length + ' teams. The import of ' + esc(failedImport.platform)
+      + ' league ' + esc(failedImport.id) + ' was refused, so nothing here changed — '
+      + '“Use this team” loads a roster from the old league.';
+  } else {
+    stale.hidden = true;
+    stale.innerHTML = '';
+  }
   var select = document.getElementById('leagueteam'), html = '';
   for (var i = 0; i < LEAGUE.teams.length; i++) {
     html += '<option value="' + i + '">' + esc(LEAGUE.teams[i].name)
@@ -6342,7 +6414,16 @@ document.addEventListener('click', function (event) {
     }
     var handler = platform === 'sleeper' ? importSleeper : importEspn;
     handler(id, function (err, result) {
-      if (err) { setStatus(err, 'bad'); return; }
+      if (err) {
+        /* Record WHAT was refused, then redraw the picker so it can disown the league
+           it is still showing. renderLeague is called explicitly because the failure
+           path deliberately does not run render(). */
+        failedImport = { platform: platform, id: id };
+        renderLeague();
+        setStatus(err, 'bad');
+        return;
+      }
+      failedImport = null;
       LEAGUE = result;
       state.league = result;
       state.leagueTeam = undefined;
@@ -6368,6 +6449,7 @@ document.addEventListener('click', function (event) {
     renderScores(true);
   } else if (target.id === 'clearleague') {
     LEAGUE = null; state.league = null; state.leagueTeam = undefined;
+    failedImport = null;
     setStatus('League cleared.', '');
     render();
   } else if (target.id === 'loadteam') {
