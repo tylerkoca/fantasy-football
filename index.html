@@ -1038,6 +1038,14 @@
                   placeholder="Paste the whole JSON page here"></textarea>
         <div class="row" style="margin-top:8px;align-items:center">
           <div><button class="primary" id="pasteload">Load pasted league</button></div>
+          <!-- THE CLIPBOARD IS NOT RELIABLE ACROSS BROWSERS and this path does not use
+               it. Firefox renders application/json in a collapsible viewer, where
+               Ctrl+A copies the rendered tree rather than JSON; saving the page and
+               picking the file works everywhere, including on a phone where selecting
+               a megabyte of text is not realistic. -->
+          <div><label for="pastefile" style="margin:0">…or load the saved file
+            (Ctrl+S on that tab)</label>
+            <input type="file" id="pastefile" accept=".json,.txt,application/json"></div>
           <div class="note" id="pastestatus" style="margin:0"></div>
         </div>
       </details>
@@ -4501,17 +4509,52 @@ function setPasteStatus(text, kind) {
    rosters (every team imports empty), and the wrong season gives a full, plausible
    league whose players are last year's. Refusing with the fix beats importing a league
    that looks right and is not. */
+/* Forgiving, but only in the one direction that is safe. If the exact text does not
+   parse, try again from the first `{` to the last `}` — that rescues a copy that picked
+   up a stray line of page furniture at either end, and it cannot turn a wrong payload
+   into a right one, because everything after this still has to pass the same checks. */
+function parseLoose(text) {
+  try {
+    return JSON.parse(text);
+  } catch (e) { /* fall through to the trimmed attempt */ }
+  var first = text.indexOf('{'), last = text.lastIndexOf('}');
+  if (first >= 0 && last > first) {
+    try {
+      return JSON.parse(text.slice(first, last + 1));
+    } catch (e2) { /* genuinely not JSON */ }
+  }
+  return null;
+}
+
+function readLeagueFile() {
+  var input = document.getElementById('pastefile');
+  var file = input.files && input.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function () {
+    adoptEspnJson(String(reader.result));
+    input.value = '';
+  };
+  reader.onerror = function () {
+    setPasteStatus('Could not read that file.', 'bad');
+  };
+  reader.readAsText(file);
+}
+
 function loadPastedLeague() {
   var text = document.getElementById('pastejson').value.replace(/^\s+|\s+$/g, '');
   if (!text) { setPasteStatus('Nothing pasted yet.', 'warn'); return; }
+  adoptEspnJson(text);
+}
 
-  var payload;
-  try {
-    payload = JSON.parse(text);
-  } catch (e) {
-    setPasteStatus('That is not valid JSON. Open the link above, select all '
-      + '(Ctrl+A), copy, and paste the whole page — not a screenshot of it and not '
-      + 'part of it.', 'bad');
+function adoptEspnJson(text) {
+  var payload = parseLoose(text.replace(/^\s+|\s+$/g, ''));
+  if (!payload) {
+    setPasteStatus('That is not JSON. The usual cause is a browser that shows JSON in '
+      + 'a collapsible viewer — Firefox does — where selecting all copies the picture '
+      + 'of the data rather than the data. Click <b>Raw Data</b> first, or skip the '
+      + 'clipboard entirely: press Ctrl+S on that tab and load the saved file with the '
+      + 'button beside this one.', 'bad');
     return;
   }
   if (!payload || !payload.teams || !payload.teams.length) {
@@ -4580,8 +4623,11 @@ function renderPasteHelp() {
     + 'tab is a <i>first-party</i> request, so it always works — and then it is copy '
     + 'and paste. Nothing is uploaded anywhere; it is read in this browser.'
     + '<br><b>1.</b> Open ' + link + ' in a tab where you are signed in to ESPN.'
-    + '<br><b>2.</b> Select all (Ctrl+A) and copy (Ctrl+C).'
-    + '<br><b>3.</b> Paste below and press <b>Load pasted league</b>.';
+    + '<br><b>2.</b> Either select all (Ctrl+A, Ctrl+C) and paste below, <b>or</b> — '
+    + 'more reliable, and the only option on a phone — press Ctrl+S to save the file '
+    + 'and load it with the file button.'
+    + '<br><b>3.</b> Press <b>Load pasted league</b> if you pasted; the file loads by '
+    + 'itself.';
 }
 
 function renderLeague() {
@@ -6638,6 +6684,9 @@ var ON_CHANGE = {
   dwhy:      renderDraft,
   roitier:   renderPositionalRoi,
   whyplayer: renderWhy,
+  /* The file itself is on the element, not in the change event's value — that is a
+     fake path — so the handler reads it back off the input. */
+  pastefile: readLeagueFile,
   scoreweek: function () { renderScores(true); },
   tradepartner: function (v) {
     tradeState.partner = v === '' ? null : +v;
