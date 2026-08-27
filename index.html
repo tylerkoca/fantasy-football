@@ -519,6 +519,30 @@
     display: inline-block; min-width: 62px; color: var(--muted); font-size: 10px;
     font-weight: 700; letter-spacing: .8px; text-transform: uppercase;
   }
+  /* A sub-heading inside a card, for a section that is part of the same argument as
+     the table above it rather than a new one deserving its own card. */
+  h3.sub {
+    font-size: 12px; margin: 18px 0 8px; text-transform: uppercase;
+    letter-spacing: .8px; font-weight: 800;
+    color: color-mix(in srgb, var(--section) 62%, var(--text));
+  }
+  /* A signed bar that grows from a centre line, for a quantity whose SIGN is the
+     finding — the flex sweep and the Shapley values both flip, and a bar anchored at
+     zero shows the crossing in a way a column of numbers does not. */
+  .signed { display: flex; align-items: center; gap: 8px; }
+  .signed .track {
+    position: relative; flex: 1 1 120px; height: 12px; min-width: 90px;
+    background: color-mix(in srgb, var(--line) 55%, transparent); border-radius: 3px;
+  }
+  .signed .track::before {
+    content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px;
+    background: var(--muted);
+  }
+  .signed .track > i { position: absolute; top: 0; height: 100%; border-radius: 2px; }
+  .signed .track > i.pos { background: var(--good); left: 50%; }
+  .signed .track > i.neg { background: var(--critical); right: 50%; }
+  .signed .val { min-width: 52px; text-align: right; font-variant-numeric: tabular-nums;
+                 font-weight: 700; }
   .empty { color: var(--dim); padding: 20px; text-align: center; }
   .note { color: var(--dim); font-size: 12px; margin-top: 8px; }
   .total {
@@ -943,6 +967,24 @@
         <span class="tag" id="draftDuelsSpan">tested against each other</span></h2>
       <div id="draftDuels"></div>
       <div class="note" id="draftDuelsNote"></div>
+    </div>
+    <div class="card">
+      <h2>Backs before receivers in round one?
+        <span class="tag" id="roiSpan">real ADP as the cost</span></h2>
+      <div class="note" id="roiIntro"></div>
+      <div class="scroll" id="roiCost"></div>
+      <div id="roiDuels"></div>
+      <h3 class="sub">And the answer depends on where you charge the flex</h3>
+      <div id="roiFlex"></div>
+      <div class="note" id="roiNote2"></div>
+    </div>
+    <div class="card">
+      <h2>The first four picks, decomposed
+        <span class="tag" id="shapSpan">exact Shapley</span></h2>
+      <div class="note" id="shapIntro"></div>
+      <div id="shapTable"></div>
+      <div id="shapPlans"></div>
+      <div class="note" id="shapNote"></div>
     </div>
     <div class="card">
       <h2>Positional scarcity
@@ -3692,6 +3734,287 @@ function renderSeasonRankings() {
  * are separated instead of being blamed on each other.
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * ROI against what the pick actually COST.
+ *
+ * The oldest argument in fantasy is "take a back in round one", and it is usually made
+ * in value over replacement. The study behind this card prices every pick at the
+ * consensus ADP it really went at and grades it on what the player really scored, and
+ * it finds two things worth separating carefully:
+ *
+ *   1. Facts that do NOT depend on any assumption — raw points returned, and how often
+ *      the pick produced a top-12 season at its position. These are just counting.
+ *   2. Value over replacement, which is NOT a fact about the players at all. It is a
+ *      fact about how many of each position a league starts, and the round-one verdict
+ *      flips sign depending on where the twelve flex spots are charged.
+ *
+ * So the card leads with (1), reports (2) at this repo's own measured flex split, and
+ * then shows the whole sweep — because a number that changes sign under a bookkeeping
+ * choice must be presented with the choice attached, not without it.
+ * ------------------------------------------------------------------ */
+var DRAFT_ROI = (DATA.facts && DATA.facts.draft_roi) || null;
+
+/* Signed bar around a centre line. `scale` is the value that fills half the track.
+   `digits` is not cosmetic: the ROI table deals in tens of points where one decimal is
+   plenty, and the Shapley values are tenths of a finishing place, where one decimal
+   rounds +0.076 and -0.042 to "+0.1" and "-0.0" — the second of which reads as a bug. */
+function signedBar(value, scale, digits) {
+  var places = digits === undefined ? 1 : digits;
+  var share = Math.max(-1, Math.min(1, scale ? value / scale : 0));
+  var width = Math.abs(share) * 50;
+  return '<span class="signed"><span class="track"><i class="'
+    + (value >= 0 ? 'pos' : 'neg') + '" style="width:' + width.toFixed(1)
+    + '%"></i></span><span class="val ' + (value >= 0 ? 'up' : 'down') + '">'
+    + (value >= 0 ? '+' : '') + value.toFixed(places) + '</span></span>';
+}
+
+function renderDraftRoi() {
+  var host = document.getElementById('roiCost');
+  if (!DRAFT_ROI || !DRAFT_ROI.roi || !DRAFT_ROI.roi.length) {
+    host.innerHTML = '<div class="empty">No ROI study in this build — run '
+      + '<code>py tools/fantasy/roi.py --generate</code>.</div>';
+    document.getElementById('roiIntro').innerHTML = '';
+    document.getElementById('roiDuels').innerHTML = '';
+    document.getElementById('roiFlex').innerHTML = '';
+    document.getElementById('roiNote2').innerHTML = '';
+    return;
+  }
+  var seasons = DRAFT_ROI.seasons || [];
+  document.getElementById('roiSpan').textContent =
+    seasons.length + ' seasons of real drafts';
+
+  /* Round one, both positions, pulled out so the intro can state the facts that do not
+     depend on the replacement assumption. Derived, never written into the prose. */
+  var rb1 = null, wr1 = null, i;
+  for (i = 0; i < DRAFT_ROI.roi.length; i++) {
+    var row = DRAFT_ROI.roi[i];
+    if (row.round !== 1) continue;
+    if (row.position === 'RB') rb1 = row;
+    if (row.position === 'WR') wr1 = row;
+  }
+  var intro = '<b>The question, priced properly.</b> Every player on the real consensus '
+    + 'board from ' + (seasons[0] || '') + ' to ' + (seasons[seasons.length - 1] || '')
+    + ', bucketed by the round he actually went in, graded on what he actually scored. '
+    + 'Cost is what the market charged; return is what came back.';
+  if (rb1 && wr1) {
+    intro += '<br><br><b>Two things here are just counting, and they do not depend on '
+      + 'any assumption.</b> Round-one receivers outscored round-one backs '
+      + '<b>' + wr1.points.toFixed(0) + '</b> to <b>' + rb1.points.toFixed(0)
+      + '</b> raw points, and they returned a top-12 season at their position '
+      + '<b>' + pct(wr1.hit_rate) + '</b> of the time against <b>'
+      + pct(rb1.hit_rate) + '</b>. The board spent its round-one picks the other way — '
+      + rb1.n + ' backs against ' + wr1.n + ' receivers.';
+  }
+  document.getElementById('roiIntro').innerHTML = intro;
+
+  var html = '<table><thead><tr><th>Rd</th><th class="l">Pos</th><th>Picks</th>'
+    + '<th>Points</th><th>Over replacement</th><th>vs the round</th>'
+    + '<th>Top-12 season</th></tr></thead><tbody>';
+  for (i = 0; i < DRAFT_ROI.roi.length; i++) {
+    var r = DRAFT_ROI.roi[i];
+    if (r.round > 5) continue;
+    html += '<tr><td>' + r.round + '</td><td class="l">' + chip(r.position) + '</td>'
+      + '<td>' + r.n + '</td>'
+      + '<td>' + r.points.toFixed(0) + '</td>'
+      + '<td><b>' + r.over_replacement.toFixed(1) + '</b> <span class="slot">± '
+      + (2 * r.spread).toFixed(1) + '</span></td>'
+      + '<td class="' + (r.vs_round >= 0 ? 'up' : 'down') + '">'
+      + (r.vs_round >= 0 ? '+' : '') + r.vs_round.toFixed(1) + '</td>'
+      + '<td>' + pct(r.hit_rate) + '</td></tr>';
+  }
+  host.innerHTML = html + '</tbody></table>';
+
+  /* The head-to-head, with its bar, so a gap inside one season's noise reads as one. */
+  var duels = DRAFT_ROI.duels || [], d = '';
+  if (duels.length) {
+    d = '<table><thead><tr><th>Round</th><th>RB</th><th>WR</th>'
+      + '<th class="l">Gap, over replacement</th><th class="l">Verdict</th>'
+      + '</tr></thead><tbody>';
+    var scale = 0;
+    for (i = 0; i < duels.length; i++) {
+      scale = Math.max(scale, Math.abs(duels[i].gap));
+    }
+    for (i = 0; i < duels.length; i++) {
+      var duel = duels[i];
+      if (duel.round > 5) continue;
+      d += '<tr><td>' + duel.round + '</td><td>' + duel.rb.toFixed(1) + '</td>'
+        + '<td>' + duel.wr.toFixed(1) + '</td>'
+        + '<td class="l">' + signedBar(duel.gap, scale) + '</td>'
+        + '<td class="l">' + (duel.separated
+            ? '<span class="tag ' + (duel.winner === 'RB' ? 'good' : 'bad') + '">'
+              + duel.winner + ' by ' + Math.abs(duel.gap).toFixed(0) + '</span>'
+            : '<span class="slot">inside the ± ' + duel.bar.toFixed(0)
+              + ' bar — too close to call</span>') + '</td></tr>';
+    }
+    d += '</tbody></table>';
+  }
+  document.getElementById('roiDuels').innerHTML = d;
+
+  renderRoiFlex();
+}
+
+/* THE SWEEP, which is the actual answer to "do backs have a better ROI".
+   Value over replacement depends on how many of each position a league starts, and
+   the round-one verdict crosses zero inside the range of defensible answers. Showing
+   the crossing is the finding; showing one column of it would be picking a side. */
+function renderRoiFlex() {
+  var host = document.getElementById('roiFlex');
+  var sweep = DRAFT_ROI && DRAFT_ROI.sensitivity;
+  if (!sweep || !sweep.rows || !sweep.rows.length) { host.innerHTML = ''; return; }
+
+  var used = DRAFT_ROI.flex_to_rb;
+  var scale = 0, i;
+  for (i = 0; i < sweep.rows.length; i++) {
+    scale = Math.max(scale, Math.abs(sweep.rows[i].round1 || 0));
+  }
+  var html = '<table><thead><tr><th class="l">League starts</th>'
+    + '<th class="l">Round-one gap, RB minus WR</th><th class="l">This is…</th>'
+    + '</tr></thead><tbody>';
+  for (i = 0; i < sweep.rows.length; i++) {
+    var row = sweep.rows[i];
+    /* Name the rows that are somebody's actual answer, so the reader can see that the
+       disagreement in the wild is exactly this axis. */
+    var who = row.rb_starters === 30 ? 'the symmetric RB30/WR30 split'
+      : row.flex_to_rb === used ? 'what this site starts, measured'
+      : '';
+    html += '<tr' + (row.flex_to_rb === used ? ' class="nb"' : '') + '>'
+      + '<td class="l">' + row.rb_starters + ' RB / ' + row.wr_starters + ' WR</td>'
+      + '<td class="l">' + signedBar(row.round1 || 0, scale) + '</td>'
+      + '<td class="l"><span class="slot">' + who + '</span></td></tr>';
+  }
+  host.innerHTML = html + '</tbody></table>';
+
+  var note = '<b>Read this before quoting any round-one VOR number, including ours.</b> '
+    + 'Value over replacement is the gap to the best player you could have had for '
+    + 'free, so it moves with how many of each position a league starts — and the flex '
+    + 'spot is what decides that. ';
+  if (sweep.flip_at !== null && sweep.flip_at !== undefined) {
+    var flipRow = null;
+    for (i = 0; i < sweep.rows.length; i++) {
+      if (sweep.rows[i].flex_to_rb === sweep.flip_at) flipRow = sweep.rows[i];
+    }
+    note += 'On identical player data the round-one verdict <b>changes sign</b> at '
+      + (flipRow ? flipRow.rb_starters + ' RB / ' + flipRow.wr_starters + ' WR'
+                 : sweep.flip_at + ' flex spots to running back')
+      + '. Charge more of the flex to running back and the backs win; charge less and '
+      + 'the receivers do. Nobody arguing this in public tells you which they assumed.';
+  } else {
+    note += 'Here the round-one verdict holds its sign across the entire range, so it '
+      + 'does <b>not</b> rest on the assumption — which is the good case, and worth '
+      + 'saying explicitly because it is not the one we found first.';
+  }
+  document.getElementById('roiNote2').innerHTML = note;
+}
+
+/* THE FIRST FOUR PICKS, DECOMPOSED — and why Shapley rather than four separate tests.
+   The four opening picks interact: a first-round back is worth something different
+   depending on whether rounds two to four also went back, because a roster is a set of
+   slots and the fifth back cannot start. Testing "RB in round one" on its own answers a
+   question nobody faces. Shapley averages each round's contribution over every ordering
+   of the other three, which is the unique attribution that is order-free and still adds
+   up — the same reason explain.py uses it on projections. The adding-up is checked:
+   the four values must equal the whole gap between opening all-receivers and
+   all-backs. */
+function renderDraftShapley() {
+  var shap = DRAFT_ROI && DRAFT_ROI.shapley;
+  var table = document.getElementById('shapTable');
+  var plans = document.getElementById('shapPlans');
+  if (!shap || !shap.rows || !shap.rows.length) {
+    table.innerHTML = '<div class="empty">No Shapley study in this build — run '
+      + '<code>py tools/fantasy/roi.py --generate</code>.</div>';
+    document.getElementById('shapIntro').innerHTML = '';
+    plans.innerHTML = '';
+    document.getElementById('shapNote').innerHTML = '';
+    return;
+  }
+  document.getElementById('shapSpan').textContent =
+    'all 16 openings, ' + (shap.rows[0].seasons || 0) + ' seasons';
+
+  document.getElementById('shapIntro').innerHTML =
+    '<b>What this measures.</b> Every combination of back and receiver across your '
+    + 'first four picks — sixteen openings — drafted from the real consensus board '
+    + 'against eleven opponents and played out on what actually happened. Each round '
+    + 'then gets its own share of the result, averaged over every ordering of the other '
+    + 'three. Positive means taking the <b>back</b> in that round improved where the '
+    + 'team finished, in places out of ' + ((DRAFT_ROI.teams || 12) - 1) + '.';
+
+  var scale = 0, i;
+  for (i = 0; i < shap.rows.length; i++) {
+    scale = Math.max(scale, Math.abs(shap.rows[i].value),
+                     2 * shap.rows[i].stderr);
+  }
+  var html = '<table><thead><tr><th class="l">Pick</th>'
+    + '<th class="l">Worth of taking the back</th><th>± 2 SE</th>'
+    + '<th>Seasons it helped</th><th class="l">Verdict</th></tr></thead><tbody>';
+  for (i = 0; i < shap.rows.length; i++) {
+    var row = shap.rows[i];
+    html += '<tr><td class="l">Round ' + row.round + '</td>'
+      + '<td class="l">' + signedBar(row.value, scale, 3) + '</td>'
+      + '<td>' + (2 * row.stderr).toFixed(2) + '</td>'
+      + '<td>' + row.seasons_positive + '/' + row.seasons + '</td>'
+      + '<td class="l">' + (row.separated
+          ? '<span class="tag ' + (row.value > 0 ? 'good' : 'bad') + '">'
+            + (row.value > 0 ? 'back is better' : 'receiver is better') + '</span>'
+          : '<span class="slot">inside the noise</span>') + '</td></tr>';
+  }
+  table.innerHTML = html + '</tbody></table>';
+
+  /* The corner cases are worth printing: forcing four of one position is a bad roster
+     whichever position it is, and seeing both corners at the bottom of the list is what
+     stops the table being read as "more backs is better". */
+  var best = shap.plans && shap.plans.length ? shap.plans[0] : null;
+  var worst = shap.plans && shap.plans.length
+    ? shap.plans[shap.plans.length - 1] : null;
+  var order = '';
+  if (best && worst) {
+    order = '<table><thead><tr><th class="l">Opening</th><th>Average finish</th>'
+      + '</tr></thead><tbody>';
+    for (i = 0; i < shap.plans.length; i++) {
+      var plan = shap.plans[i];
+      var tag = i === 0 ? '<span class="tag good">best</span>'
+        : i === shap.plans.length - 1 ? '<span class="tag bad">worst</span>' : '';
+      order += '<tr><td class="l">' + esc(plan.plan.replace(/-/g, ' → ')) + ' ' + tag
+        + '</td><td>' + plan.finish.toFixed(2) + '</td></tr>';
+    }
+    order += '</tbody></table>';
+  }
+  plans.innerHTML = order;
+
+  /* Every verdict below is read off the fixture on each render. The draft tab has
+     already shipped one hardcoded conclusion that survived a data change which should
+     have killed it; that is not happening twice. */
+  var real = 0, helped = 0;
+  for (i = 0; i < shap.rows.length; i++) {
+    if (shap.rows[i].separated) real++;
+    if (shap.rows[i].value > 0) helped++;
+  }
+  var bits = [];
+  bits.push('<b>The verdict.</b> ' + (real
+    ? real + ' of the ' + shap.rows.length + ' rounds clears its own error bar.'
+    : '<b>Not one of the ' + shap.rows.length + ' rounds clears its own error bar.</b> '
+      + 'Taking the back rather than the receiver is worth less than the '
+      + 'season-to-season noise, wherever in the first four picks you do it — which '
+      + 'agrees with the backtest above, where no named plan separated from an '
+      + 'auto-draft either.')
+    + ' The back helped in ' + helped + ' of ' + shap.rows.length + ' rounds on the '
+    + 'point estimate, which is what a coin would do.');
+  bits.push('<b>Both extremes are bad, and that is the useful part.</b> Opening with '
+    + 'four backs finishes <b>' + shap.all_rb_finish.toFixed(2) + '</b> and four '
+    + 'receivers <b>' + shap.all_wr_finish.toFixed(2) + '</b>, against '
+    + (((DRAFT_ROI.teams || 12) + 1) / 2).toFixed(2) + ' for an average team. The '
+    + 'openings that finish well are mixed ones, so the real lesson is about balance '
+    + 'rather than about which position goes first.');
+  bits.push('<b>The arithmetic checks itself.</b> The four contributions sum to '
+    + shap.sum_of_values.toFixed(3) + ' against a measured all-receiver-to-all-back gap '
+    + 'of ' + shap.total_gap.toFixed(3) + ' — they must add up exactly, and the residual '
+    + 'is ' + shap.efficiency_error.toExponential(1) + '. That is the property that '
+    + 'makes this an account rather than a ranking.');
+  bits.push('<b>What it cannot see.</b> Rosters are draft-only — no waivers, no trades, '
+    + 'no injury replacements — so any plan whose real case rests on replacing a bust '
+    + 'off the wire is understated here.');
+  document.getElementById('shapNote').innerHTML = bits.join('<br><br>');
+}
+
 var ROI = (DATA.facts && DATA.facts.positional_roi) || null;
 
 function renderPositionalRoi() {
@@ -6432,6 +6755,8 @@ function renderDraft() {
   renderDraftPlan(slot, teams, plan, size);
   renderWinners();
   renderDuels();
+  renderDraftRoi();
+  renderDraftShapley();
   renderCliffs(size, teams);
 
   var position = document.getElementById('dpos').value;
