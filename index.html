@@ -283,11 +283,16 @@
       color-mix(in srgb, var(--section) 25%, transparent) 60%, transparent);
   }
   label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 3px; }
-  input, select, button {
+  input, select, button, textarea {
     font: inherit; color: var(--text); background: var(--panel-2);
     border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px;
   }
-  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  textarea { font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+             font-size: 11px; line-height: 1.4; resize: vertical; }
+  input:focus, select:focus, textarea:focus {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  summary { cursor: pointer; color: var(--accent); font-size: 13px; font-weight: 600; }
   input[type=number] { width: 76px; }
   button { cursor: pointer; }
   button.primary {
@@ -1022,6 +1027,20 @@
       </div>
       <div class="note" id="importhelp"></div>
       <div class="note" id="importstatus"></div>
+      <!-- THE ESCAPE HATCH FOR A PRIVATE LEAGUE, and the only one that works in a
+           browser. Fetching it needs a cookie that will not cross origins; opening the
+           same URL in a tab is first-party, so it always works. Everything after that
+           is copy and paste. -->
+      <details id="pasteBox" style="margin-top:12px">
+        <summary>Private ESPN league? Paste the league JSON instead</summary>
+        <div class="note" id="pastehelp"></div>
+        <textarea id="pastejson" rows="4" style="width:100%"
+                  placeholder="Paste the whole JSON page here"></textarea>
+        <div class="row" style="margin-top:8px;align-items:center">
+          <div><button class="primary" id="pasteload">Load pasted league</button></div>
+          <div class="note" id="pastestatus" style="margin:0"></div>
+        </div>
+      </details>
       <div class="row" id="teamPick" hidden style="align-items:flex-end;margin-top:10px">
         <!-- Full-width, and ABOVE the picker rather than beside it: it exists to stop
              the controls under it being read as the league you just typed in. -->
@@ -4385,6 +4404,32 @@ function importSleeper(id, done) {
   });
 }
 
+/* ONE PARSER FOR BOTH WAYS IN. The fetched payload and the pasted payload are the same
+   bytes — the only difference is which side of the cookie problem they came from — so
+   they must not get two mappings that can drift. `payload.id` is preferred over the id
+   typed in the box because a paste is self-identifying and the box may hold something
+   else entirely. */
+function espnResult(payload, fallbackId) {
+  var byEspn = indexBy('espn_id'), teams = [], unresolved = 0;
+  var list = payload.teams || [];
+  for (var t = 0; t < list.length; t++) {
+    var entries = (list[t].roster && list[t].roster.entries) || [], players = [];
+    for (var e = 0; e < entries.length; e++) {
+      var hit = byEspn[String(entries[e].playerId)];
+      if (hit) players.push(hit.gsis_id); else unresolved++;
+    }
+    teams.push({ team_id: String(list[t].id),
+                 name: list[t].name
+                   || ((list[t].location || '') + ' ' + (list[t].nickname || '')).replace(/^ | $/g, '')
+                   || ('Team ' + list[t].id),
+                 players: players });
+  }
+  return { platform: 'espn',
+           league_id: String(payload.id || fallbackId || ''),
+           name: (payload.settings && payload.settings.name) || '',
+           teams: teams, unresolved: unresolved };
+}
+
 function importEspn(id, done) {
   /* mSettings is not decoration: the success path reads payload.settings.name, and
      without asking for the view ESPN does not send `settings` at all — so the league
@@ -4398,25 +4443,7 @@ function importEspn(id, done) {
      itself and nothing needs pasting. */
   fetch(url, { credentials: 'include' })
     .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
-    .then(function (payload) {
-      var byEspn = indexBy('espn_id'), teams = [], unresolved = 0;
-      var list = payload.teams || [];
-      for (var t = 0; t < list.length; t++) {
-        var entries = (list[t].roster && list[t].roster.entries) || [], players = [];
-        for (var e = 0; e < entries.length; e++) {
-          var hit = byEspn[String(entries[e].playerId)];
-          if (hit) players.push(hit.gsis_id); else unresolved++;
-        }
-        teams.push({ team_id: String(list[t].id),
-                     name: list[t].name
-                       || ((list[t].location || '') + ' ' + (list[t].nickname || '')).replace(/^ | $/g, '')
-                       || ('Team ' + list[t].id),
-                     players: players });
-      }
-      done(null, { platform: 'espn', league_id: String(id),
-                   name: (payload.settings && payload.settings.name) || '',
-                   teams: teams, unresolved: unresolved });
-    })
+    .then(function (payload) { done(null, espnResult(payload, id)); })
     .catch(function (err) {
       if (err === 401 || err === 403) {
         /* THIS MESSAGE USED TO SAY "sign in and try again", WHICH IS ADVICE THAT MAY
@@ -4433,19 +4460,20 @@ function importEspn(id, done) {
            them: opening the same URL as a normal tab is a FIRST-PARTY request to
            espn.com, where the cookie attaches whatever its SameSite says. What comes
            back names the cause. */
-        done('<b>ESPN answered 401 — it does not know who you are.</b> The league is '
-           + 'private, so the request needed your ESPN login cookie and did not carry '
-           + 'one. There are two reasons for that and they need opposite fixes, so '
-           + 'find out which: <a href="' + esc(url) + '" target="_blank" '
-           + 'rel="noopener">open the league on espn.com in this same browser</a>. '
-           + 'That is a first-party request, so your cookie attaches however it is '
-           + 'configured.<br><br><b>If JSON comes back</b> you are signed in, and the '
-           + 'cookie simply cannot cross from this site to espn.com — signing in again '
-           + 'will not change that. Import it at build time instead: '
-           + '<code>build.py --espn-league ' + esc(String(id)) + ' --espn-cookies '
-           + '&lt;file&gt;</code>, where the file holds your espn_s2 and SWID.'
-           + '<br><b>If you get 401 there too</b> you are simply signed out — sign in '
-           + 'at fantasy.espn.com and press Import again.');
+        /* The paste box below is the fix, so this points straight at it rather than
+           making the reader diagnose anything. The link doubles as the diagnosis: if
+           it returns JSON they are signed in and can paste it, and if it returns 401
+           they are signed out, which the same sentence tells them. */
+        document.getElementById('pasteBox').open = true;
+        done('<b>ESPN answered 401 — it does not know who you are.</b> This league is '
+           + 'private, so the request needed your ESPN login cookie, and browsers will '
+           + 'not send that cookie from this site to espn.com. Signing in again does '
+           + 'not change that, so there is nothing to retry here.<br><br>'
+           + '<b>Use the paste box below instead — it is open.</b> '
+           + '<a href="' + esc(url) + '" target="_blank" rel="noopener">Open your '
+           + 'league on espn.com</a> (a first-party request, so your cookie works), '
+           + 'select all, copy, and paste it in. If that link shows 401 as well, you '
+           + 'are signed out of ESPN — sign in at fantasy.espn.com and open it again.');
       } else if (err === 404) {
         done('No ESPN league ' + esc(String(id)) + ' in ' + DATA.season + '.');
       } else {
@@ -4461,9 +4489,105 @@ function importEspn(id, done) {
     });
 }
 
+function setPasteStatus(text, kind) {
+  var node = document.getElementById('pastestatus');
+  node.innerHTML = text ? '<span class="tag ' + (kind || '') + '">' + kind
+    + '</span> ' + text : '';
+}
+
+/* ADOPT A LEAGUE PASTED IN AS JSON.
+   Everything that can be wrong with a paste is checked and named, because the failure
+   modes are all silent otherwise: the wrong views give a payload with teams and no
+   rosters (every team imports empty), and the wrong season gives a full, plausible
+   league whose players are last year's. Refusing with the fix beats importing a league
+   that looks right and is not. */
+function loadPastedLeague() {
+  var text = document.getElementById('pastejson').value.replace(/^\s+|\s+$/g, '');
+  if (!text) { setPasteStatus('Nothing pasted yet.', 'warn'); return; }
+
+  var payload;
+  try {
+    payload = JSON.parse(text);
+  } catch (e) {
+    setPasteStatus('That is not valid JSON. Open the link above, select all '
+      + '(Ctrl+A), copy, and paste the whole page — not a screenshot of it and not '
+      + 'part of it.', 'bad');
+    return;
+  }
+  if (!payload || !payload.teams || !payload.teams.length) {
+    setPasteStatus('That JSON has no <code>teams</code> in it. The URL needs '
+      + '<code>?view=mTeam&amp;view=mRoster&amp;view=mSettings</code> on the end — '
+      + 'without the views ESPN sends a league with nothing in it.', 'bad');
+    return;
+  }
+  /* A payload from another season imports cleanly and is wrong: the roster is last
+     year's, and players who have since moved are attributed to the wrong team. */
+  if (payload.seasonId && String(payload.seasonId) !== String(DATA.season)) {
+    setPasteStatus('That is the <b>' + esc(String(payload.seasonId)) + '</b> season and '
+      + 'these projections are for <b>' + DATA.season + '</b>. Change '
+      + '<code>seasons/' + esc(String(payload.seasonId)) + '/</code> to '
+      + '<code>seasons/' + DATA.season + '/</code> in the URL and copy it again.',
+      'bad');
+    return;
+  }
+
+  var result = espnResult(payload, '');
+  var rostered = 0;
+  for (var t = 0; t < result.teams.length; t++) rostered += result.teams[t].players.length;
+  if (!rostered) {
+    setPasteStatus('That league has ' + result.teams.length + ' teams and not one '
+      + 'player on any of them, which means <code>view=mRoster</code> was missing from '
+      + 'the URL. Add it and copy again.', 'bad');
+    return;
+  }
+
+  failedImport = null;
+  LEAGUE = result;
+  state.league = result;
+  state.leagueTeam = undefined;
+  document.getElementById('pastejson').value = '';
+  document.getElementById('pasteBox').open = false;
+  setPasteStatus('', '');
+  setStatus('Loaded ' + result.teams.length + ' teams'
+    + (result.name ? ' from ' + esc(result.name) : '') + ', ' + rostered + ' players'
+    + (result.unresolved
+        ? '. <b>' + result.unresolved + ' could not be matched</b> to our data and will '
+          + 'wrongly appear as free agents on Waivers.'
+        : '.')
+    + ' Pick your team below.',
+    result.unresolved ? 'warn' : 'good');
+  render();
+}
+
+/* The exact URL for whatever id is currently in the box, so the instructions are about
+   the reader's league rather than about a placeholder. */
+function espnLeagueUrl(id) {
+  return 'https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/'
+    + DATA.season + '/segments/0/leagues/' + encodeURIComponent(id)
+    + '?view=mTeam&view=mRoster&view=mSettings';
+}
+
+function renderPasteHelp() {
+  var typed = document.getElementById('leagueid').value.replace(/^\s+|\s+$/g, '');
+  var id = parseLeagueId(typed);
+  var link = id
+    ? '<a href="' + esc(espnLeagueUrl(id)) + '" target="_blank" rel="noopener">this '
+      + 'link</a>'
+    : 'the league URL (put your league ID in the box above first)';
+  document.getElementById('pastehelp').innerHTML =
+    '<b>Why this exists.</b> A private league needs your ESPN login cookie, and a '
+    + 'browser will not send that from this site to espn.com. Opening the same URL in a '
+    + 'tab is a <i>first-party</i> request, so it always works — and then it is copy '
+    + 'and paste. Nothing is uploaded anywhere; it is read in this browser.'
+    + '<br><b>1.</b> Open ' + link + ' in a tab where you are signed in to ESPN.'
+    + '<br><b>2.</b> Select all (Ctrl+A) and copy (Ctrl+C).'
+    + '<br><b>3.</b> Paste below and press <b>Load pasted league</b>.';
+}
+
 function renderLeague() {
   document.getElementById('importhelp').innerHTML =
     HELP[document.getElementById('platform').value];
+  renderPasteHelp();
   var pick = document.getElementById('teamPick');
   if (!LEAGUE || !LEAGUE.teams || !LEAGUE.teams.length) { pick.hidden = true; return; }
   pick.hidden = false;
@@ -6445,6 +6569,8 @@ document.addEventListener('click', function (event) {
         result.unresolved ? 'warn' : 'good');
       render();
     });
+  } else if (target.id === 'pasteload') {
+    loadPastedLeague();
   } else if (target.id === 'refreshscores') {
     renderScores(true);
   } else if (target.id === 'clearleague') {
