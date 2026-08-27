@@ -446,6 +446,13 @@
   .up   { color: var(--good); }
   .down { color: var(--critical); }
   .slot { color: var(--muted); font-size: 11px; letter-spacing: .5px; }
+  /* "Why this week" now carries a sentence per factor rather than two words, so the
+     column needs room to breathe and a floor on its width — at the old size the
+     defence's name wrapped onto its own line and the reason read as two fragments. */
+  .whyweek { font-size: 11px; color: var(--dim); line-height: 1.4; margin-top: 3px; }
+  .whyweek > div { margin: 2px 0; }
+  .whyweek .up, .whyweek .down { font-weight: 700; font-variant-numeric: tabular-nums; }
+  td.whycell { min-width: 210px; }
   /* Slot-by-slot breakdown under a trade verdict. Wraps rather than scrolls: there are
      at most nine of these and a manager reads them as a set, not a list. */
   .slotmoves { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
@@ -2042,7 +2049,7 @@ function playerRow(entry, options) {
     + '<td><b>' + entry.points.toFixed(1) + '</b></td>'
     + sourceCells(entry)
     + '<td class="l">' + bandCell(entry) + '</td>'
-    + '<td class="l">' + weekReasonCell(entry) + '</td>'
+    + '<td class="l whycell">' + weekReasonCell(entry) + '</td>'
     + '</tr>';
 }
 
@@ -2100,6 +2107,10 @@ var TABLE_HEAD = '<thead><tr><th class="l">Player</th><th class="l">Matchup</th>
    is why a running back never shows weather and a receiver rarely shows a game total.
 
    Order is by absolute size, so the biggest mover leads regardless of sign. */
+/* The bare labels, used only when the fact behind a factor is missing from the build.
+   "tough matchup" is a restatement of the minus sign, not a reason — the functions
+   below say WHICH defence and HOW stingy, which is the thing a manager is actually
+   deciding on. */
 var WEEK_REASON = {
   matchup: { up: 'soft matchup', down: 'tough matchup' },
   environment: { up: 'shootout', down: 'low-scoring game' },
@@ -2107,6 +2118,98 @@ var WEEK_REASON = {
   team_change: { up: 'new team', down: 'new team' },
   availability: { up: 'injury report', down: 'injury report' }
 };
+
+/* THE AVERAGE IMPLIED TOTAL THIS WEEK, so "low-scoring game" can say low COMPARED TO
+   WHAT. A 19.5-point implied total means nothing on its own; 19.5 against a 22.4
+   average is the whole point. Memoised per week — it is one number for the table. */
+var impliedAvg = { week: null, value: null };
+
+function weekImpliedAverage() {
+  if (impliedAvg.week === state.week) return impliedAvg.value;
+  var spots = GAMELINES[state.week] || {}, total = 0, n = 0, team;
+  for (team in spots) {
+    if (Object.prototype.hasOwnProperty.call(spots, team)) {
+      total += spots[team][0];
+      n++;
+    }
+  }
+  impliedAvg = { week: state.week, value: n ? total / n : null };
+  return impliedAvg.value;
+}
+
+/* WHY THE MATCHUP IS SOFT OR TOUGH, in the terms a reader already thinks in.
+   `defense_allowed` ranks 1 = MOST points conceded, so a good defence carries a high
+   rank and has to be flipped: "29th-most" is how nobody describes a stout front, and
+   "4th-fewest" is how everybody does. The team count comes off the table rather than
+   being hardcoded at 32, so the flip stays right if the league ever changes size. */
+function matchupCause(position, opponent) {
+  var table = (FACTS.defense_allowed || {})[position];
+  if (!table || !opponent || !table[opponent]) return '';
+  var teams = 0, key;
+  for (key in table) if (Object.prototype.hasOwnProperty.call(table, key)) teams++;
+  var rank = table[opponent][0], perGame = table[opponent][1];
+  var soft = rank * 2 <= teams;
+  var place = soft ? rank : (teams + 1 - rank);
+  return esc(opponent) + ' allowed the ' + ordinal(place) + '-'
+    + (soft ? 'most' : 'fewest') + ' points to ' + esc(position) + 's ('
+    + perGame.toFixed(1) + '/gm)';
+}
+
+/* WHY THE GAME IS A SHOOTOUT OR A SLOG. The implied total against the week's own
+   average, plus the spread where it is doing something — and it only genuinely does
+   something for a quarterback, which is where the 5.3-point swing was measured. */
+function environmentCause(player, position) {
+  var spot = (GAMELINES[state.week] || {})[player.team];
+  if (!spot) return '';
+  var implied = spot[0], spread = spot[1], average = weekImpliedAverage();
+  var text = esc(player.team) + ' implied ' + implied.toFixed(1);
+  if (average !== null) {
+    var gap = implied - average;
+    text += Math.abs(gap) < 0.75
+      ? ', about this week’s average'
+      : ', ' + Math.abs(gap).toFixed(1) + ' ' + (gap > 0 ? 'above' : 'below')
+        + ' the ' + average.toFixed(1) + ' average';
+  }
+  if (position === 'QB' && spread <= -3) text += '; underdogs throw more';
+  else if (position === 'QB' && spread >= 6) text += '; big favourites run the clock out';
+  return text;
+}
+
+/* The forecast, always in numbers. Thresholding this at "notable" was how a 5 mph,
+   73°F game came to be described as "wind or cold": the multiplier is applied at any
+   wind speed, so the explanation has to be too. A mild forecast reads as mild, which is
+   the correct thing for it to say. */
+function weatherCause(player) {
+  var wx = ((FACTS.weather || {}).conditions || {})[state.week];
+  if (!wx || !wx[player.team]) return '';
+  var spot = wx[player.team];
+  var wind = spot[0], temp = spot[1], precip = spot[2];
+  var bits = [wind.toFixed(0) + ' mph wind', temp.toFixed(0) + '°F'];
+  if (precip >= 0.5) bits.push('rain or snow');
+  return bits.join(', ');
+}
+
+function availabilityCause(player, week) {
+  var injury = player.injury, bits = [];
+  if (injury && injury.status) {
+    bits.push(esc(injury.status)
+      + (injury.part ? ' — ' + esc(injury.part) : ''));
+  }
+  if (week.play_probability !== undefined && week.play_probability < 0.99) {
+    bits.push(Math.round(week.play_probability * 100) + '% to play');
+  }
+  return bits.join(', ');
+}
+
+/* The reason behind one factor, or '' when the build carries no fact for it. */
+function weekCause(name, entry) {
+  if (name === 'matchup') return matchupCause(entry.position, entry.week.opponent);
+  if (name === 'environment') return environmentCause(entry.player, entry.position);
+  if (name === 'weather') return weatherCause(entry.player);
+  if (name === 'availability') return availabilityCause(entry.player, entry.week);
+  if (name === 'team_change') return 'first season with ' + esc(entry.player.team);
+  return '';
+}
 
 /* The metric layer costs 2^n scorings and does NOT depend on the week — only on the
    player and the scoring config. The rankings table renders a hundred rows through
@@ -2155,19 +2258,26 @@ function weekReasonCell(entry) {
   rows.sort(function (a, b) { return Math.abs(b.v) - Math.abs(a.v); });
   if (!rows.length) return '<span class="slot">nothing this week</span>';
 
+  /* EACH FACTOR GETS THE REASON, NOT JUST THE LABEL. "-0.8 tough matchup" says the
+     same thing twice — the sign already told you it was tough — and answers none of
+     what a manager is deciding on. "-0.8 SEA allowed the 4th-fewest points to RBs
+     (13.1/gm)" is the same number carrying the fact behind it. The label is kept as the
+     fallback for a factor whose supporting fact is missing from the build, which is
+     normal: weather has no forecast beyond ~16 days, so a preseason build has none. */
   var total = 0, out = [];
   for (var i = 0; i < rows.length; i++) total += rows[i].v;
   for (i = 0; i < Math.min(2, rows.length); i++) {
-    var label = (WEEK_REASON[rows[i].name] || {})[rows[i].v >= 0 ? 'up' : 'down']
-      || rows[i].name;
-    out.push('<span class="' + (rows[i].v >= 0 ? 'up' : 'down') + '">'
-      + (rows[i].v >= 0 ? '+' : '') + rows[i].v.toFixed(1) + '</span> ' + esc(label));
+    var up = rows[i].v >= 0;
+    var cause = weekCause(rows[i].name, entry);
+    var label = (WEEK_REASON[rows[i].name] || {})[up ? 'up' : 'down'] || rows[i].name;
+    out.push('<div><span class="' + (up ? 'up' : 'down') + '">'
+      + (up ? '+' : '') + rows[i].v.toFixed(1) + '</span> '
+      + (cause || esc(label)) + '</div>');
   }
   var verdict = total >= 1.0 ? '<span class="tag good">boom setup</span>'
     : total <= -1.0 ? '<span class="tag bad">tough spot</span>'
     : '';
-  return verdict + (verdict ? '<br>' : '') + '<span class="slot">'
-    + out.join(' &middot; ') + '</span>';
+  return verdict + '<div class="whyweek">' + out.join('') + '</div>';
 }
 
 /* What a typical starting lineup scores this week, computed rather than remembered.
@@ -3155,9 +3265,11 @@ function lineCommentary(player, stat, unit, e) {
     }
   }
 
-  /* How the two numbers on screen turn into the verdict in the last column. */
-  var why = leanCommentary(e, unit);
-  if (why) bits.push(why);
+  /* The lean paragraph is deliberately NOT pushed here any more. It restated the Book %
+     / Our % / Lean columns in prose, and reprinting them directly under the row they
+     were removed from would put back exactly what was taken out. `leanCommentary` is
+     kept rather than deleted because the measurement behind it is real and the panel
+     note still refers to the band; nothing calls it. */
 
   /* WHO WAS ACTUALLY ON THE FIELD, before any claim about the offence.
      Reading last season's total as a fact about the offence is how this got Baltimore
@@ -3302,58 +3414,35 @@ function renderLines() {
   }
   rows.sort(function (a, b) { return b.e.line - a.e.line; });
 
+  /* The two implied-probability columns and the lean verdict were removed on request.
+     What is left is the comparison anyone actually wants — what the book posted against
+     what we project — and the per-row note underneath still explains the gap. Nothing
+     downstream reads them; `leanBand` and `pctText` stay because the note and
+     `leanCommentary` still cite the band. */
   var html = '<table><thead><tr><th class="l">Player</th><th>Sportsbook line</th>'
     + '<th>Price</th><th>We project</th><th>Per game</th>'
-    + '<th>Book %</th><th>Our %</th><th class="l">Lean</th>'
     + '</tr></thead><tbody>';
   for (var r = 0; r < rows.length; r++) {
     var row = rows[r], e = row.e;
-    var edge = (e.p !== null && e.book !== null) ? e.p - e.book : null;
-    var lean = '<span class="slot">—</span>';
-    if (edge !== null) {
-      /* Only call it a lean when the disagreement is bigger than the width of the
-         error distribution behind our own number. Below that, we agree. */
-      lean = (Math.abs(edge) >= leanBand())
-        ? '<span class="tag ' + (edge > 0 ? 'good' : 'bad') + '">'
-          + (edge > 0 ? 'OVER' : 'UNDER') + '</span>'
-        : '<span class="slot">line looks right</span>';
-    } else if (e.p !== null) {
-      /* We have a number but the book posted no price on one side, so there is nothing
-         to disagree WITH. Saying "line looks right" here asserts an agreement that was
-         never computed — edge is null and the old test only checked our own side. */
-      lean = '<span class="slot">no price</span>';
-    }
     html += '<tr class="nb"><td class="l who"' + teamStyle(row.p.team) + '>'
       + avatar(row.p) + chip(row.p.position) + esc(row.p.name) + ' '
       + teamBadge(row.p.team) + '</td>'
       + '<td><b>' + e.line.toFixed(1) + '</b></td>'
       + '<td class="odds">' + oddsPair(e) + '</td>'
       + '<td>' + (e.ours === null ? '—' : e.ours.toFixed(0)) + '</td>'
-      + '<td>' + (e.pg === null ? '—' : e.pg.toFixed(1)) + '</td>'
-      + '<td>' + pctText(e.book) + '</td>'
-      + '<td>' + pctText(e.p) + '</td>'
-      + '<td class="l">' + lean + '</td></tr>'
-      + '<tr class="why"><td colspan="8" class="l">'
+      + '<td>' + (e.pg === null ? '—' : e.pg.toFixed(1)) + '</td></tr>'
+      + '<tr class="why"><td colspan="5" class="l">'
       + lineCommentary(row.p, stat, unit, e) + '</td></tr>';
   }
   host.innerHTML = html + '</tbody></table>';
   note.innerHTML = esc((DATA.facts && DATA.facts.lines_note) || '')
-    + ' The lean compares us against the book price with its margin stripped out, so a '
-    + '−110/−110 market counts as a true coin flip rather than the 52.4% each side that '
-    + 'the raw price implies.'
-    + '<br><br><b>The verdict is the two percentage columns subtracted, not the two '
-    + 'point columns.</b> That is why a large gap can read “line looks right” while a '
-    + 'smaller one leans: '
-    + '<b>(1)</b> the band is relative, so 100 yards is nothing on a 4,300-yard passing '
-    + 'line and a great deal on a 700-yard rushing one; '
-    + '<b>(2)</b> each stat regresses at its own width — rushing touchdowns run from '
-    + '0.62 to 1.24 of projection across the middle half of seasons, so the numbers have '
-    + 'to be ~16% apart to move the probability at all, where passing yards need ~7%; '
-    + '<b>(3)</b> the price moves the bar — most markets are hung near even money, but '
-    + 'about one in six is priced 4 points or more off it, and there we can sit close to '
-    + 'the line and still disagree with the bet. Each row says which of the three is '
-    + 'doing the work.'
-    + '<br><br><b>We land on the under nearly every time, and here is the check on '
+    + '<br><br><b>A gap between the line and our number is not a disagreement worth '
+    + 'acting on.</b> Season totals regress at very different widths — rushing '
+    + 'touchdowns run from 0.62 to 1.24 of projection across the middle half of '
+    + 'seasons, where passing yards barely move — so 100 yards is nothing on a '
+    + '4,300-yard passing line and a great deal on a 700-yard rushing one. Read each '
+    + 'row’s note for what is driving its number rather than the size of the gap.'
+    + '<br><br><b>We land under the line nearly every time, and here is the check on '
     + 'that.</b> Rather than argue about it, take running backs who finished a season '
     + 'in a given tier and look at what they actually rushed for the NEXT year — which '
     + 'is what an over/under settles on, injuries and lost jobs included. Measured '
