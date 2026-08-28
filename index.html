@@ -5177,9 +5177,88 @@ function weeklyEntries(ids, weeks) {
   return byWeek;
 }
 
+/* AN EMPTY SLOT IS NOT WORTH ZERO, AND PRICING IT THAT WAY DECIDED WHOLE TRADES.
+   `optimize` leaves a slot empty when the roster cannot fill it — a bye, an injury,
+   or simply not owning a second one — and scores it at nothing. That is right for the
+   Start/Sit lineup, which is telling you who to play THIS week out of who you own. It
+   is wrong for a trade, because nobody fields ten men: you stream someone off the
+   wire and take his points.
+
+   Measured on the case that prompted this: send an elite TE, and in the week the
+   other one is on bye the grade charged the FULL 10.8 points of the man you sent, as
+   though the slot went dark. Two bye weeks — one where the RB slot was empty before
+   the trade, one where the TE slot was empty after — swung +8.6 and -10.8 and decided
+   a verdict that was under a point a week in the other sixteen.
+
+   So every empty slot is filled from the same replacement-level probe the rest of
+   this tab already measures against: the best player at that position who does NOT
+   start anywhere in a league of this size, which is who a waiver claim actually gets
+   you. Applied identically before and after, so it can only move weeks where a slot
+   was genuinely empty. `optimize` itself is untouched — `squadShape` reads the empty
+   slots to separate a COVER problem from a weak position, and would go blind if the
+   holes were papered over underneath it. */
+function wireEntries(weeks, index) {
+  var memo = tradeMemoFor(), key = weeks[index];
+  if (!memo.wire) memo.wire = {};
+  if (memo.wire[key] !== undefined) return memo.wire[key];
+  var out = [];
+  for (var i = 0; i < TRADE_POSITIONS.length; i++) {
+    if (!slotsAllow(TRADE_POSITIONS[i])) continue;
+    var ladder = wireLadder(TRADE_POSITIONS[i], weeks);
+    for (var j = 0; j < ladder.length; j++) {
+      var entry = entryFor(ladder[j], key);
+      if (!entry || entry.week.is_bye || unavailable(entry.player)) continue;
+      out.push(entry);
+    }
+  }
+  memo.wire[key] = out;
+  return out;
+}
+
+/* What the wire adds to one week's lineup, per slot.
+
+   THE MAN ON THE WIRE MUST NOT BE A MAN YOU ALREADY OWN, and skipping that check
+   handed a roster back its own starter. Replacement level is read off the global
+   ranking, which knows nothing about who is rostered where, so on a roster whose
+   second back happens to sit below the replacement index the ladder offered him for
+   the empty slot beside himself — eleven points of pure double-count, in the bye week
+   the fill exists to handle. Twice, once on each side of the trade, which is exactly
+   the kind of error that cancels on most rosters and does not on the one you are
+   looking at.
+
+   A claim can also only be made once, so no man fills two slots in the same week. */
+function wireFill(lineup, wire, owned) {
+  var used = {}, bySlot = {}, total = 0, i, j;
+  for (i = 0; i < lineup.length; i++) {
+    if (lineup[i].entry) continue;
+    var best = null;
+    for (j = 0; j < wire.length; j++) {
+      var id = wire[j].player.gsis_id;
+      if (used[id] || (owned && owned[id])) continue;
+      if (!eligible(lineup[i].slot, wire[j].position)) continue;
+      if (!best || wire[j].points > best.points) best = wire[j];
+    }
+    if (!best) continue;
+    used[best.player.gsis_id] = true;
+    bySlot[lineup[i].slot] = (bySlot[lineup[i].slot] || 0) + best.points;
+    total += best.points;
+  }
+  return { bySlot: bySlot, total: total };
+}
+
+/* The squad as a lookup, so the wire can be told who is already spoken for. */
+function ownedMap(ids) {
+  var out = {};
+  for (var i = 0; i < ids.length; i++) out[ids[i]] = true;
+  return out;
+}
+
 function squadTotal(ids, weeks) {
-  var byWeek = weeklyEntries(ids, weeks), total = 0;
-  for (var w = 0; w < byWeek.length; w++) total += optimize(byWeek[w]).total;
+  var byWeek = weeklyEntries(ids, weeks), owned = ownedMap(ids), total = 0;
+  for (var w = 0; w < byWeek.length; w++) {
+    var lineup = optimize(byWeek[w]);
+    total += lineup.total + wireFill(lineup.lineup, wireEntries(weeks, w), owned).total;
+  }
   return total;
 }
 
@@ -5189,16 +5268,66 @@ function squadTotal(ids, weeks) {
    do about it. Slots are grouped by name, so the two RB slots report together — which
    is the honest grain, since the optimiser is free to shuffle who sits in which. */
 function squadBySlot(ids, weeks) {
-  var byWeek = weeklyEntries(ids, weeks), out = {}, total = 0;
+  var byWeek = weeklyEntries(ids, weeks), out = {}, total = 0, played = [];
+  var owned = ownedMap(ids);
   for (var w = 0; w < byWeek.length; w++) {
     var lineup = optimize(byWeek[w]).lineup;
+    var wire = wireFill(lineup, wireEntries(weeks, w), owned), slot;
+    var week = {};
     for (var i = 0; i < lineup.length; i++) {
-      var slot = lineup[i].slot, points = lineup[i].entry ? lineup[i].entry.points : 0;
+      slot = lineup[i].slot;
+      var points = lineup[i].entry ? lineup[i].entry.points : 0;
       out[slot] = (out[slot] || 0) + points;
       total += points;
+      /* Who actually took the field, for the spread below. A streamed replacement is
+         left out: he is not a player either side of the trade owns, and both sides
+         get the same one, so he cancels. */
+      if (lineup[i].entry) week[lineup[i].entry.player.gsis_id] = lineup[i].entry;
+    }
+    for (slot in wire.bySlot) {
+      if (!Object.prototype.hasOwnProperty.call(wire.bySlot, slot)) continue;
+      out[slot] = (out[slot] || 0) + wire.bySlot[slot];
+    }
+    total += wire.total;
+    played.push(week);
+  }
+  return { bySlot: out, total: total, played: played };
+}
+
+/* HOW BIG IS THE NUMBER COMPARED WITH THE NOISE ON IT?
+   A rest-of-season total answers "which side is better" and says nothing about
+   whether the difference is real. Nineteen points across eighteen weeks is one point
+   a week on a lineup scoring a hundred and twenty, and the tab was printing it in
+   red as though your season had been decided.
+
+   So the swing is propagated from the model's OWN fitted bands rather than asserted:
+   `bands.py` gives each player-week a 20th and 80th percentile of the ratio between
+   outcome and projection, which is 1.683 standard deviations wide. Only the players
+   whose starting status the trade CHANGES contribute — everyone who starts either way
+   scores the same points in both worlds and cancels exactly, as does the streamer
+   filling a hole both sides share. Weeks are summed in variance, which assumes their
+   errors are independent; that is the same assumption `bands.py` fits under. */
+var BAND_SDS = 1.683;
+
+function swingSd(before, after) {
+  var variance = 0;
+  for (var w = 0; w < before.played.length; w++) {
+    var b = before.played[w], a = after.played[w], id;
+    for (id in b) {
+      if (Object.prototype.hasOwnProperty.call(b, id) && !a[id]) variance += entryVar(b[id]);
+    }
+    for (id in a) {
+      if (Object.prototype.hasOwnProperty.call(a, id) && !b[id]) variance += entryVar(a[id]);
     }
   }
-  return { bySlot: out, total: total };
+  return Math.sqrt(variance);
+}
+
+function entryVar(entry) {
+  var w = entry.week;
+  if (!w.floor_mult || !entry.points) return 0;
+  var sd = entry.points * (w.ceiling_mult - w.floor_mult) / BAND_SDS;
+  return sd * sd;
 }
 
 /* Which slots a swap actually moved, biggest mover first. Slots that did not shift are
@@ -5235,7 +5364,15 @@ function swapIds(ids, drop, add) {
    scanning a thousand players eighteen weeks deep sixty times over, which was six
    seconds of the seven this tab took. Keyed on everything that can change the
    numbers — week, slots, scoring — and on nothing that cannot. */
-var tradeMemo = { key: null, probe: {}, raw: {} };
+var tradeMemo = { key: null, probe: {}, ladder: {}, raw: {} };
+
+/* How far below replacement level the wire is followed when the man at it is on bye.
+   REPLACEMENT LEVEL IS A LEVEL, NOT A PERSON, and treating it as a person made his bye
+   into your bye: with a single named probe, the one week the replacement running back
+   was off, the tab reported that no running back could be had at all and left the slot
+   at zero — in the exact week a real manager is most obviously making a claim. Twelve
+   deep clears any bye week, since at most six teams are ever off at once. */
+var WIRE_LADDER = 12;
 
 function scoringKey() {
   var keys = Scoring.sortedKeys(state.config.per_stat), parts = [];
@@ -5247,7 +5384,7 @@ function scoringKey() {
 
 function tradeMemoFor() {
   var key = scoringKey();
-  if (tradeMemo.key !== key) tradeMemo = { key: key, probe: {}, raw: {} };
+  if (tradeMemo.key !== key) tradeMemo = { key: key, probe: {}, ladder: {}, raw: {} };
   return tradeMemo;
 }
 
@@ -5301,11 +5438,27 @@ function positionProbe(position, weeks) {
   for (pos in ranked) {
     if (!Object.prototype.hasOwnProperty.call(ranked, pos)) continue;
     var list = ranked[pos];
-    var pick = list[starters[pos] || 0] || list[list.length - 1];
+    var at = starters[pos] || 0;
+    var pick = list[at] || list[list.length - 1];
     memo.probe[pos] = pick ? pick.p : null;
+    /* The same level, and the men just below it, so a week where the first of them is
+       on bye still has a replacement in it. */
+    var ladder = [];
+    for (i = at; i < list.length && ladder.length < WIRE_LADDER; i++) {
+      ladder.push(list[i].p);
+    }
+    memo.ladder[pos] = ladder;
   }
   if (memo.probe[position] === undefined) memo.probe[position] = null;
+  if (memo.ladder[position] === undefined) memo.ladder[position] = [];
   return memo.probe[position];
+}
+
+/* Replacement level at this position in ONE week: the best man at or below it who is
+   actually playing. Empty only if the whole ladder is off, which does not happen. */
+function wireLadder(position, weeks) {
+  positionProbe(position, weeks);
+  return tradeMemoFor().ladder[position] || [];
 }
 
 /* WHERE A SQUAD IS THIN, in the only units that matter.
@@ -5609,12 +5762,17 @@ function renderTradeVerdict() {
   }
   var graded = { mine: mineAfter.total - myBase, theirs: theirGrade };
   var moved = slotDeltas(mineBefore, mineAfter);
+  var perWeek = graded.mine / weeks.length;
+  var swing = swingSd(mineBefore, mineAfter);
+  /* Inside the swing, the sign of this number is not information. */
+  var decisive = Math.abs(graded.mine) > swing;
 
   var html = '<div class="verdictrow"><span class="who">Your lineup</span>'
     + '<span class="delta ' + (graded.mine >= 0 ? 'up' : 'down') + '">'
     + (graded.mine >= 0 ? '+' : '') + graded.mine.toFixed(1) + '</span>'
     + '<span class="who" style="min-width:0">points over ' + weeks.length
-    + ' remaining weeks</span></div>';
+    + ' remaining weeks — <b>' + (perWeek >= 0 ? '+' : '') + perWeek.toFixed(1)
+    + '</b> a week</span></div>';
   if (graded.theirs !== null) {
     var partner = LEAGUE.teams[tradeState.partner];
     html += '<div class="verdictrow"><span class="who">'
@@ -5622,6 +5780,15 @@ function renderTradeVerdict() {
       + (graded.theirs >= 0 ? 'up' : 'down') + '">'
       + (graded.theirs >= 0 ? '+' : '') + graded.theirs.toFixed(1) + '</span>'
       + '<span class="who" style="min-width:0">what it does for them</span></div>';
+  }
+  /* THE SWING, BESIDE THE DIFFERENCE, because one is meaningless without the other.
+     Printed whenever the bands support it, and printed for a WIN as loudly as for a
+     loss — a tab that only qualifies bad news is not being careful, it is arguing. */
+  if (swing > 0) {
+    html += '<div class="verdictrow"><span class="who">Ordinary swing</span>'
+      + '<span class="delta" style="color:var(--dim)">±' + swing.toFixed(0) + '</span>'
+      + '<span class="who" style="min-width:0">how much the players this trade '
+      + 'changes vary anyway, over the same ' + weeks.length + ' weeks</span></div>';
   }
   /* WHERE THE POINTS WENT. A two-for-one that grades negative looks like an error
      until you can see that the slot you upgraded was already filled. */
@@ -5639,32 +5806,58 @@ function renderTradeVerdict() {
   host.innerHTML = html;
 
   var lines = [];
-  if (graded.mine > TRADE_MIN_GAIN) {
-    lines.push('This improves your starting lineup by <b>' + graded.mine.toFixed(1)
-      + '</b> points across the rest of the season.');
-  } else if (graded.mine < -TRADE_MIN_GAIN) {
-    lines.push('This <b>costs</b> you ' + Math.abs(graded.mine).toFixed(1)
-      + ' lineup points. Whatever the names look like, your starters get worse.');
-    /* THE CASE THAT LOOKS LIKE A BUG AND IS NOT: two good players in for one, and the
-       grade still goes down, because the slot they upgrade was already filled. Naming
-       the two slots is the difference between an answer and an assertion. */
+  var size = Math.abs(graded.mine).toFixed(1), rate = Math.abs(perWeek).toFixed(1);
+  if (Math.abs(graded.mine) <= TRADE_MIN_GAIN) {
+    lines.push('This is worth almost nothing to you either way — under a point '
+      + 'across the whole rest of the season.');
+  } else if (!decisive) {
+    /* THE VERDICT THIS TAB USED TO GET WRONG. It called any gap over a single point
+       across eighteen weeks a win or a loss, in bold, with no sense of scale — so a
+       trade worth about a point a week read as a season-defining mistake. It is the
+       difference between "your starters get worse" and "we think this is slightly the
+       wrong side of a coin flip", and only one of those is what the number supports. */
+    lines.push('Our number says this ' + (graded.mine < 0 ? 'costs' : 'gains')
+      + ' you <b>' + size + '</b> lineup points across the rest of the season, which is '
+      + rate + ' a week. <b>That is inside the noise.</b> The players whose starting '
+      + 'status this trade changes swing ±' + swing.toFixed(0) + ' points over the same '
+      + 'stretch just by being football players, so the difference is a fraction of the '
+      + 'week-to-week variation on the men involved. Treat this as close to even and '
+      + 'decide it on what the projections cannot see.');
+  } else {
+    /* The comparison is only made when there is a band to make it with. Some players
+       carry no fitted band — too small a projection to fit a ratio against — and
+       "larger than the ±0 they swing anyway" would be a claim about nothing. */
+    var against = swing > 0 ? ', which is more than the ±' + swing.toFixed(0)
+      + ' the players involved swing anyway' : '';
+    if (graded.mine > 0) {
+      lines.push('This improves your starting lineup by <b>' + size + '</b> points '
+        + 'across the rest of the season, ' + rate + ' a week' + against + '.');
+    } else {
+      lines.push('This <b>costs</b> you ' + size + ' lineup points, ' + rate + ' a week'
+        + against + '. Whatever the names look like, your starters get worse.');
+    }
+  }
+  /* WHY A TWO-FOR-ONE CAN STILL GRADE NEGATIVE, which looks like a bug and is not.
+     This used to quote the gained slot's number and then say that gain "sits on your
+     bench scoring nothing for you" — which contradicted the figure in the same
+     sentence. Every number here is already a STARTING-LINEUP delta, so a +39.2 at
+     receiver is 39.2 points that really do reach the field. The honest explanation is
+     the comparison, not a claim that the gain is imaginary: the man you sent was
+     starting, and what slides up to replace him is worth less than he was. */
+  if (!decisive || graded.mine < -TRADE_MIN_GAIN) {
     var gained = null, lost = null, mv;
     for (mv = 0; mv < moved.length; mv++) {
       if (moved[mv].delta > 0 && !gained) gained = moved[mv];
       if (moved[mv].delta < 0 && !lost) lost = moved[mv];
     }
     if (gained && lost && receiving.length > sending.length) {
-      lines.push('Getting more bodies back is not the same as getting more points: your '
-        + gained.slot + ' improves by ' + gained.delta.toFixed(1) + ', but you can only '
-        + 'start ' + (state.slots[gained.slot] || 1) + ' of them, so everything above '
-        + 'that sits on your bench scoring nothing for you. Meanwhile your ' + lost.slot
-        + ' drops ' + Math.abs(lost.delta).toFixed(1) + ', and that one you do start '
-        + 'every week. Upgrading a position you have already filled is the most '
-        + 'expensive way to lose a trade, because it is the one that feels like winning.');
+      lines.push('Where it goes: your ' + gained.slot + ' really does gain '
+        + gained.delta.toFixed(1) + ' points of starting lineup, but your ' + lost.slot
+        + ' loses ' + Math.abs(lost.delta).toFixed(1) + '. Getting two players back for '
+        + 'one only helps if both can start; the man you sent was in your lineup every '
+        + 'week, and whoever slides up to take that slot is worth less than he was. '
+        + 'That gap, not the number of bodies, is the whole trade.');
     }
-  } else {
-    lines.push('This is worth almost nothing to you either way — under a point '
-      + 'across the whole rest of the season.');
   }
   if (graded.theirs === null) {
     lines.push('The other side cannot be graded without a league import, so this is '
@@ -5683,7 +5876,20 @@ function renderTradeVerdict() {
   lines.push('Both figures are lineup points, not raw points: every week is re-optimised '
     + 'under your slots and your scoring, before and after. That is why a big name can '
     + 'grade at nothing — if he would sit behind someone you already start, he adds '
-    + 'nothing to start.');
+    + 'nothing to start. A week where a slot would otherwise go empty is filled from '
+    + 'the wire on both sides rather than scored as zero, because nobody fields nine '
+    + 'men: a bye is worth what the man you send beats a waiver claim by, not his whole '
+    + 'projection.');
+  /* WHAT THIS CANNOT SEE, said plainly, on the backtest's precedent. Both of these
+     favour the side receiving more bodies, and neither is measurable from what this
+     build emits: P(play) is an injury-report term and reads 1.000 for everybody in the
+     preseason, so modelling depth as insurance would be inventing a number. */
+  lines.push('<b>Two things this grade does not price.</b> It assumes everyone plays '
+    + 'every week they are not on bye, so the extra body in a two-for-one is worth '
+    + 'nothing as injury cover — and cover is most of why managers make that trade. It '
+    + 'also stops at the end of this season, so a younger player costs nothing to give '
+    + 'up. Both push the number against whoever receives more players; read it as a '
+    + 'floor for that side.');
   note.innerHTML = lines.join(' ');
 }
 
