@@ -553,19 +553,6 @@
     background: color-mix(in srgb, var(--team, var(--line)) 12%, transparent);
     border: 1px solid color-mix(in srgb, var(--team, var(--line)) 40%, transparent);
   }
-  /* The break between tiers, and the reason the tier list exists: it says what waiting
-     costs, in the same points as the column above it. */
-  .tiergap {
-    font-size: 11px; color: var(--dim); font-weight: 700; letter-spacing: .4px;
-    text-transform: uppercase; margin: 2px 0 2px 104px; padding-left: 10px;
-    border-left: 3px solid color-mix(in srgb, var(--critical) 55%, transparent);
-  }
-  /* A break under a point a week is real arithmetic and not worth reaching for, so it
-     is drawn as the faint thing it is rather than in the same red as a genuine cliff. */
-  .tiergap.slight {
-    border-left-color: color-mix(in srgb, var(--line) 70%, transparent);
-    text-transform: none; letter-spacing: 0; font-weight: 400;
-  }
   /* A sub-heading inside a card, for a section that is part of the same argument as
      the table above it rather than a new one deserving its own card. */
   h3.sub {
@@ -6904,35 +6891,72 @@ function boardRows(fmt) {
   return value;
 }
 
-/* TIERS: WHERE THE BOARD ACTUALLY BREAKS, AND THE THRESHOLD IS DERIVED.
-   A tier list is only worth anything if the breaks are real, and "real" has to be
-   measured rather than eyeballed. Within a position, take the drop from each player to
-   the next and find the MEDIAN drop — that is what an ordinary step down the board
-   costs at this position, in this scoring. A break is a step that costs more than
-   twice that. So the threshold adapts: quarterbacks step down gently and break in a
-   few obvious places, running backs fall off a shelf early, and switching to standard
-   scoring moves both because the projections underneath move.
+/* TIERS BY NATURAL BREAKS, BECAUSE GAP-CHASING PUTS THE BEST PLAYER ALONE.
+   The first version broke wherever the step down exceeded a multiple of the typical
+   step. That is the obvious rule and it fails in a specific, predictable way: on a
+   board the gaps are widest at the TOP, so it made singleton tiers out of the best
+   players and dumped everyone else together. It produced a quarterback list of
+   "Josh Allen", then "Jalen Hurts", then SEVENTEEN men in one tier — which is not a
+   tier list, it is a ranked list with three labels on it, and it said Hurts was in a
+   class of his own while Lamar Jackson was interchangeable with a streamer.
 
-   The median drop is printed beside each position, so the reader can see what the
-   threshold was rather than trusting a number nobody shows them.
+   The fix is to stop looking at gaps one at a time and ask the question a tier list is
+   actually asking: what grouping makes the players WITHIN each tier as alike as
+   possible? That is Fisher-Jenks natural breaks — the exact 1-D clustering that
+   minimises total within-tier squared deviation, solved by dynamic programming over
+   contiguous runs. It puts a genuine outlier alone (Allen still is one) and it keeps
+   the elite together, because splitting four similar players costs more variance than
+   it saves.
 
-   THE MULTIPLE IS CHOSEN BY MEASUREMENT, NOT BY TASTE. Sweeping it over the emitted
-   board gives tier counts of:
-
-       multiple    QB    RB    WR    TE
-          2.0x      7    14    13     6
-          2.5x      5     9    12     5
-          3.0x      4     9    10     4
-          4.0x      2     7     9     4
-          6.0x      2     5     5     2
-
-   Two is not a threshold, it is a rounding error on the typical step — fourteen
-   running back tiers is a ranked list wearing a hat. Four collapses quarterback to two
-   tiers, which hides the one break at that position anybody cares about. Three is the
-   only multiple that leaves every position with tiers of four to six men, which is the
-   size a drafter can actually hold in their head while the clock runs. */
-var TIER_BREAK = 3.0;
+   HOW MANY TIERS is derived too, by goodness of variance fit: the share of the total
+   spread the grouping explains. Add tiers until GVF clears the bar or the cap is hit.
+   A fixed count would be wrong for the same reason a fixed gap was — quarterback and
+   receiver do not have the same shape, and neither does the same position under
+   different scoring. */
+var TIER_GVF = 0.94;
+var TIER_MAX = 7;
 var TIER_DEPTH = { QB: 24, RB: 42, WR: 48, TE: 24 };
+
+/* Fisher-Jenks over values already sorted best-first. Returns the break indices that
+   minimise within-tier squared deviation for exactly `k` tiers.
+
+   The squared deviation of a run is computed from prefix sums rather than by walking
+   it, which is what keeps this O(k.n^2) instead of O(k.n^3) — at n=48 either would do,
+   but the prefix form is also what makes the total comparable against the whole-list
+   deviation for the GVF below. */
+function jenksBreaks(values, k) {
+  var n = values.length, i, j, c;
+  var sum = [0], sq = [0];
+  for (i = 0; i < n; i++) {
+    sum.push(sum[i] + values[i]);
+    sq.push(sq[i] + values[i] * values[i]);
+  }
+  function ssd(from, to) {           // [from, to)
+    var count = to - from;
+    if (count <= 1) return 0;
+    var total = sum[to] - sum[from];
+    return (sq[to] - sq[from]) - (total * total) / count;
+  }
+  var cost = [], back = [];
+  for (c = 0; c <= k; c++) {
+    cost.push([]); back.push([]);
+    for (j = 0; j <= n; j++) { cost[c].push(Infinity); back[c].push(0); }
+  }
+  cost[0][0] = 0;
+  for (c = 1; c <= k; c++) {
+    for (j = 1; j <= n; j++) {
+      for (i = c - 1; i < j; i++) {
+        if (cost[c - 1][i] === Infinity) continue;
+        var trial = cost[c - 1][i] + ssd(i, j);
+        if (trial < cost[c][j]) { cost[c][j] = trial; back[c][j] = i; }
+      }
+    }
+  }
+  var cuts = [], at = n;
+  for (c = k; c > 0; c--) { cuts.unshift(back[c][at]); at = back[c][at]; }
+  cuts.push(n);
+  return { cuts: cuts, ssd: cost[k][n] };
+}
 
 function tiersFor(rows, position) {
   var pool = [], i;
@@ -6943,17 +6967,27 @@ function tiersFor(rows, position) {
   pool = pool.slice(0, TIER_DEPTH[position] || 36);
   if (pool.length < 4) return null;
 
-  var drops = [];
-  for (i = 0; i < pool.length - 1; i++) drops.push(pool[i].season - pool[i + 1].season);
-  var typical = median(drops);
-  var bar = typical * TIER_BREAK;
+  var values = [];
+  for (i = 0; i < pool.length; i++) values.push(pool[i].season);
+  var whole = jenksBreaks(values, 1).ssd;    // the deviation with no tiers at all
 
-  var tiers = [[pool[0]]];
-  for (i = 1; i < pool.length; i++) {
-    if (pool[i - 1].season - pool[i].season > bar) tiers.push([]);
-    tiers[tiers.length - 1].push(pool[i]);
+  /* Fewest tiers that explain enough of the spread. Stopping at the first k to clear
+     the bar is what keeps a flat position (every quarterback after the top two) from
+     being sliced into groups that are not really different. */
+  var k = TIER_MAX, gvf = 0, found = null;
+  for (var t = 2; t <= Math.min(TIER_MAX, pool.length); t++) {
+    var attempt = jenksBreaks(values, t);
+    gvf = whole > 0 ? 1 - attempt.ssd / whole : 1;
+    if (gvf >= TIER_GVF) { found = attempt; k = t; break; }
+    found = attempt; k = t;
   }
-  return { tiers: tiers, typical: typical, bar: bar, n: pool.length };
+  if (!found) return null;
+
+  var tiers = [];
+  for (i = 0; i + 1 < found.cuts.length; i++) {
+    tiers.push(pool.slice(found.cuts[i], found.cuts[i + 1]));
+  }
+  return { tiers: tiers, gvf: gvf, k: k, n: pool.length };
 }
 
 function renderDraftBoard() {
@@ -7065,54 +7099,42 @@ function renderTiers(data, fmt, report) {
     var built = tiersFor(data.rows, order[i]);
     if (!built) continue;
     any = true;
-    html += '<h3 class="sub">' + order[i] + ' <span class="subtext">— ordinary step '
-      + built.typical.toFixed(1) + ' pts, a break needs more than '
-      + built.bar.toFixed(1) + '</span></h3>';
+    html += '<h3 class="sub">' + order[i] + '</h3>';
     for (var t = 0; t < built.tiers.length; t++) {
       var tier = built.tiers[t];
-      html += '<div class="swrow"><b>' + order[i] + (t + 1) + '</b>';
+      html += '<div class="swrow"><b>Tier ' + (t + 1) + '</b>';
       for (var m = 0; m < tier.length; m++) {
         html += '<span class="tiername"' + teamStyle(tier[m].p.team) + '>'
           + esc(tier[m].p.name) + ' <span class="subtext">'
           + tier[m].season.toFixed(0) + '</span></span>';
       }
       html += '</div>';
-      /* The size of the break, IN POINTS AND PER WEEK, printed between the tiers it
-         separates. A season gap needs the weekly figure beside it or it cannot be
-         judged: the rule finds a real break between the second and third quarterback
-         worth 10 points, and 10 points across a season is six tenths of a point a week
-         — technically a break, practically nothing. Showing both is what stops the
-         reader treating every line as equally worth reaching for. */
-      if (t < built.tiers.length - 1) {
-        var gap = tier[tier.length - 1].season - built.tiers[t + 1][0].season;
-        var weekly = gap / Math.max(1, DATA.weeks.length);
-        html += '<div class="tiergap' + (weekly < 1 ? ' slight' : '') + '">drops '
-          + gap.toFixed(0) + ' points here — <b>' + weekly.toFixed(1)
-          + '</b> a week' + (weekly < 1 ? ', which is barely a break at all' : '')
-          + '</div>';
-      }
     }
     lines.push(order[i] + ' ' + built.tiers.length);
   }
   host.innerHTML = any ? html : '<div class="empty">Not enough players to tier.</div>';
   document.getElementById('tierSpan').textContent = FORMAT_LABEL[fmt] + ' · '
     + lines.join(' · ') + ' tiers';
-  note.innerHTML = '<b>The breaks are measured, not drawn by eye.</b> Within a position '
-    + 'we take the drop from each player to the next and find the <b>median</b> — what '
-    + 'an ordinary step down this board costs. A tier ends where a step costs more than '
-    + '<b>' + TIER_BREAK.toFixed(0) + '×</b> that. Both numbers are printed above each '
-    + 'position, so you can see the threshold rather than take it on trust. The multiple '
-    + 'was picked by sweeping it: at 2× a running back list breaks into fourteen tiers, '
-    + 'which is a ranked list wearing a hat, and at 4× quarterback collapses into two '
-    + 'and hides the only break there that matters. Three is the one that leaves every '
-    + 'position with tiers of four to six.'
-    + '<br><br><b>What a tier is for.</b> Inside one, the players are close enough that '
-    + 'taking the last of them costs you almost nothing — so if a tier has four men left '
-    + 'and your pick is two away, you can wait. The line between tiers is where waiting '
-    + 'stops being free, and the points it costs are printed on it.'
-    + '<br><br>This follows the <b>' + FORMAT_LABEL[fmt] + '</b> selector on the board '
-    + 'above: the tiers are cut from projections scored that way, so the shape genuinely '
-    + 'changes between formats rather than the labels changing over a fixed order.';
+  note.innerHTML = '<b>Tiers are cut where the players stop resembling each other</b>, '
+    + 'not wherever the biggest gap happens to fall. The grouping is the one that makes '
+    + 'the men inside each tier as alike as possible — so a genuine outlier still stands '
+    + 'alone, but four similar players stay together instead of being split by whichever '
+    + 'gap between them was widest.'
+    + '<br><br><b>An earlier version did chase gaps, and it was wrong in a way worth '
+    + 'knowing about.</b> On any board the gaps are widest at the top, so it made '
+    + 'singletons of the best players and left seventeen quarterbacks in one tier — '
+    + 'saying the second-best was in a class of his own while the third was '
+    + 'interchangeable with a streamer. If a tier here looks too big or too small, that '
+    + 'is the projections talking, not the cut.'
+    + '<br><br><b>How many tiers is also derived.</b> Tiers are added until the grouping '
+    + 'explains ' + Math.round(TIER_GVF * 100) + '% of the spread at that position, up '
+    + 'to ' + TIER_MAX + '. A fixed count would be wrong for the same reason a fixed gap '
+    + 'was: quarterback and receiver are not the same shape, and neither is a position '
+    + 'under different scoring.'
+    + '<br><br><b>The number beside each name is his projected season</b> under the '
+    + '<b>' + FORMAT_LABEL[fmt] + '</b> selector on the board above — change it and the '
+    + 'tiers are recut, because the shape genuinely differs between formats rather than '
+    + 'the labels moving over a fixed order.';
 }
 
 /* ------------------------------------------------------------------ *
