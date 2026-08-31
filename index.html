@@ -1128,7 +1128,10 @@
              ever imported. With one league those are the same thing, which is why the
              old wording survived; with three they are very different, and the
              destructive reading is the one that loses work. -->
-        <div><button class="link" id="clearleague">Remove this league</button></div>
+        <!-- Hidden when there is nothing to remove. It offered "Remove this league" to
+             a first-time visitor with no league, which is a control that cannot do
+             anything and reads as though it might. -->
+        <div><button class="link" id="clearleague" hidden>Remove this league</button></div>
       </div>
       <div class="note" id="importhelp"></div>
       <div class="note" id="importstatus"></div>
@@ -5359,6 +5362,7 @@ function renderLeagueList() {
 function renderLeague() {
   renderLeagueSwitch();
   renderLeagueList();
+  document.getElementById('clearleague').hidden = !activeLeagueRecord();
   document.getElementById('importhelp').innerHTML =
     HELP[document.getElementById('platform').value];
   renderPasteHelp();
@@ -6939,11 +6943,22 @@ function renderPickPlan(slot, teams, size) {
     + 'round four depends on rounds one to three. The board thins by itself as the pick '
     + 'numbers rise. Where a row says <span class="slot">must fill</span>, the rounds '
     + 'left have run down to the starters you still need and only those are offered.'
-    + '<br><br><b>Only one quarterback and one tight end appear in these ten rounds</b>, '
-    + 'and that is deliberate. Over-replacement value is measured against the man who '
-    + 'would otherwise start, so it is true of the first one you take and false of the '
-    + 'second: your backup quarterback starts nowhere. Without the cap the list spent '
-    + 'four premium picks on two startable players.'
+    + '<br><br><b>Only one quarterback and one tight end appear in these ten rounds, '
+    + 'and the backtest says that costs you a little.</b> The reasoning for the cap is '
+    + 'that over-replacement value is measured against the man who would otherwise '
+    + 'START, so it is true of the first one you take and false of the second — without '
+    + 'it the list spent four premium picks on two startable players. That argument is '
+    + 'sound and it was still only an argument, so the rule was put through the same '
+    + 'fourteen-season test as everything below: it comes out <b>+0.07 of a finishing '
+    + 'place worse</b> than auto-drafting, better in only 4 of 14 seasons, and it is the '
+    + '<b>only</b> row in that table which separates from the line at all — against '
+    + 'itself. It is kept anyway, for a reason the test cannot see: those rosters are '
+    + 'graded <b>best-ball</b> with no waiver wire, which is the friendliest possible '
+    + 'world for a backup. Best-ball starts whichever of your two tight ends scored more '
+    + 'that week, bye included, for free. A real league makes you choose on Sunday '
+    + 'morning and lets you stream the bye off waivers instead. So 0.07 of one place out '
+    + 'of twelve is an upper bound on what the cap costs, and you are seeing the number '
+    + 'rather than the argument.'
     + '<br><br><b>Where this disagrees with the backtest below, read both.</b> If a '
     + 'tight end leads one of your early rounds it is because this year’s top one is '
     + 'genuinely scarce at the position, and the table further down says a forced '
