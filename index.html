@@ -988,6 +988,18 @@
         </div>
       </div>
       <div id="draftPlan"></div>
+      <!-- The same two controls drive this: it is the same seat, answered with names
+           instead of strategy labels. A drafter on the clock wants "who", and the
+           table above only ever said "what kind of player". -->
+      <h3 class="sub">Who to take at each of your picks</h3>
+      <div class="scroll" id="pickPlan"></div>
+      <div class="note" id="pickPlanNote"></div>
+    </div>
+    <div class="card" id="recapCard">
+      <h2>League draft recap
+        <span class="tag" id="recapSpan">every team, your scoring</span></h2>
+      <div class="scroll" id="draftRecap"></div>
+      <div class="note" id="draftRecapNote"></div>
     </div>
     <div class="card">
       <h2>What actually won
@@ -6713,6 +6725,465 @@ function renderReportCard() {
    The backtest behind this table is not circular: the board is real consensus ADP from
    real drafts, and the grade is what actually happened that season. A constraint CAN
    beat best-available here, so a rank is a real answer. See history.py. */
+/* ------------------------------------------------------------------ *
+ * WHO TO TAKE, PICK BY PICK.
+ *
+ * The strategy table above this answers "what KIND of player from this seat", which is
+ * the honest answer to the question it was asked and is not what somebody on the clock
+ * needs. This names men.
+ *
+ * The whole thing turns on one number the rest of this repo had flagged as missing and
+ * kept guessing at: the measured SPREAD of where a player actually goes.
+ * Fantasy Football Calculator publishes it per player alongside the consensus average,
+ * over every real draft taken in the last week — 8,000-odd of them at this time of
+ * year — so "will he still be there at pick 31?" stops being a feel and becomes
+ * P(draft slot > 31) read off that player's own distribution. `draft.py`'s
+ * `ADP_NOISE_FRAC` had to assume a constant fraction of ADP; this does not have to.
+ * ------------------------------------------------------------------ */
+
+/* Normal CDF, Abramowitz & Stegun 26.2.17 — five terms, |error| < 7.5e-8, which is
+   four orders of magnitude tighter than a draft-position spread measured to one
+   decimal place. */
+function normalCdf(z) {
+  var sign = z < 0 ? -1 : 1, x = Math.abs(z) / Math.SQRT2;
+  var t = 1 / (1 + 0.3275911 * x);
+  var y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
+                - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return 0.5 * (1 + sign * y);
+}
+
+/* The chance this player is still on the board when the pick comes round.
+
+   THE QUESTION IS ABOUT THE PICKS BEFORE YOURS, NOT ABOUT YOUR OWN. Asking
+   P(his slot > pick) said Jahmyr Gibbs — average draft position 1.5 — was only 76% to
+   be available to the man holding pick ONE, where nothing whatever has been drafted
+   yet and the answer is certainly 1. The number of picks that can take him is
+   `pick - 1`, so that is what his distribution is asked about; at the first overall
+   pick that is zero picks and everybody is there. */
+function stillThere(pick, adp, sd) {
+  var before = pick - 1;
+  if (!sd) return before < adp ? 1 : 0;
+  var chance = 1 - normalCdf((before - adp) / sd);
+  return chance < 0 ? 0 : (chance > 1 ? 1 : chance);
+}
+
+/* Which overall picks belong to this seat, snaking. */
+function seatPicks(slot, teams, rounds) {
+  var out = [];
+  for (var r = 1; r <= rounds; r++) {
+    var within = (r % 2) ? slot : (teams - slot + 1);
+    out.push({ round: r, pick: (r - 1) * teams + within });
+  }
+  return out;
+}
+
+/* ESPN's own season projection for a player: their weekly numbers added up.
+   IN ESPN'S SCORING, NOT YOURS, and that is the point of showing it — it is the number
+   on their site, carried across unchanged so it can be compared with the one they
+   print. Rescoring it under this page's config would make it a third opinion of ours
+   rather than a second opinion of theirs. Bye weeks are absent from the feed rather
+   than zero, so this is already a 17-game total; it still assumes he plays all of
+   them, which is exactly why it runs above ours. */
+function espnSeason(player) {
+  var total = 0, week;
+  for (week in player.weeks) {
+    if (!Object.prototype.hasOwnProperty.call(player.weeks, week)) continue;
+    var w = player.weeks[week];
+    if (w && !w.is_bye && w.espn_points) total += w.espn_points;
+  }
+  return total;
+}
+
+/* Roster shape the plan drafts toward. Not the user's slots: this card is about a
+   generic draft from a chosen seat, the same scope as the two selects above it, and
+   the VOR it ranks on is `draft.py`'s under standard starters. Caps stop the list
+   recommending a fourth quarterback once the obvious ones are gone. */
+/* ONE QUARTERBACK AND ONE TIGHT END, and the cap is doing real work rather than
+   tidying. Value over replacement says Jalen Hurts is worth 41 points and Kyle Pitts
+   42, and both numbers are true of the FIRST one you draft: they are measured against
+   a replacement who would otherwise start. The second one starts nowhere. Allowing two
+   had the planner spend round three on Josh Allen and round five on Hurts, and round
+   two on Trey McBride and round four on Colston Loveland — four premium picks for two
+   startable players. It is the same defect the Trades tab is written to explain,
+   arriving from the other direction: upgrading a slot you have already filled is the
+   most expensive thing you can do, because it feels like winning.
+
+   Backs and receivers are capped loosely instead of at their starter counts, because
+   the flex is real and so is a bye week. */
+var PLAN_CAP = { QB: 1, RB: 4, WR: 4, TE: 1 };
+var PLAN_ROUNDS = 10;
+var PLAN_MIN_CHANCE = 0.25;
+var PLAN_SHOW = 3;
+
+/* Starters you must come out of a draft with. Once the rounds left equal the holes
+   left, the plan stops offering luxuries — which is the one piece of draft logic that
+   is not a matter of taste. */
+var PLAN_NEED = { QB: 1, RB: 2, WR: 2, TE: 1 };
+
+function pickPlanRows(slot, teams, size) {
+  var consensus = DRAFT.consensus || {};
+  var pool = [], i;
+  for (i = 0; i < PLAYERS.length; i++) {
+    var p = PLAYERS[i], entry = consensus[p.gsis_id];
+    if (!entry) continue;
+    var vor = (DRAFT.vor[p.gsis_id] || {})[teams];
+    if (vor === undefined) continue;
+    if (!PLAN_CAP[p.position]) continue;   // kickers and defences are not plan material
+    pool.push({ p: p, adp: entry[0], sd: entry[1], drafts: entry[2], vor: vor,
+                pts: DRAFT.season_points[p.gsis_id] || 0, espn: espnSeason(p) });
+  }
+  pool.sort(function (a, b) { return b.vor - a.vor; });
+
+  var picks = seatPicks(slot, teams, PLAN_ROUNDS), taken = {}, have = {}, rows = [];
+  for (i = 0; i < picks.length; i++) {
+    var pick = picks[i];
+    /* Holes left against rounds left. When they are equal every remaining pick is
+       spoken for, so nothing outside the need list is offered. */
+    var holes = 0, pos;
+    for (pos in PLAN_NEED) {
+      if (Object.prototype.hasOwnProperty.call(PLAN_NEED, pos)) {
+        holes += Math.max(0, PLAN_NEED[pos] - (have[pos] || 0));
+      }
+    }
+    var forced = holes >= (picks.length - i);
+
+    var options = [];
+    for (var j = 0; j < pool.length && options.length < PLAN_SHOW; j++) {
+      var cand = pool[j];
+      if (taken[cand.p.gsis_id]) continue;
+      if ((have[cand.p.position] || 0) >= PLAN_CAP[cand.p.position]) continue;
+      if (forced && (have[cand.p.position] || 0) >= (PLAN_NEED[cand.p.position] || 0)) {
+        continue;
+      }
+      var chance = stillThere(pick.pick, cand.adp, cand.sd);
+      if (chance < PLAN_MIN_CHANCE) continue;
+      options.push({ row: cand, chance: chance });
+    }
+    if (!options.length) break;
+    rows.push({ round: pick.round, pick: pick.pick, options: options, forced: forced });
+
+    /* THE PLAN HAS TO COMMIT TO SOMETHING OR EVERY ROUND LISTS THE SAME THREE MEN.
+       It takes its own first suggestion and moves on, which is what makes round four's
+       list depend on rounds one to three.
+
+       Nothing else needs removing. The board thins by itself, because `stillThere`
+       falls as the pick number rises: anyone failing the chance test at this pick
+       fails it at every later one. An earlier version also swept the pool after each
+       pick and marked those men taken, which read like it was doing work and was
+       exactly equivalent to the filter a few lines up. */
+    var chosen = options[0].row;
+    taken[chosen.p.gsis_id] = true;
+    have[chosen.p.position] = (have[chosen.p.position] || 0) + 1;
+  }
+  return rows;
+}
+
+function renderPickPlan(slot, teams, size) {
+  var host = document.getElementById('pickPlan');
+  var note = document.getElementById('pickPlanNote');
+  var report = DRAFT.consensus_report || {};
+  if (!DRAFT.consensus || !report.drafts) {
+    host.innerHTML = '<div class="empty">No consensus board in this build — the '
+      + 'planner needs one, because "will he be there?" is a question about real '
+      + 'drafts.</div>';
+    note.innerHTML = '';
+    return;
+  }
+  var rows = pickPlanRows(+slot, +teams, size);
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">Nothing to plan from this seat.</div>';
+    note.innerHTML = '';
+    return;
+  }
+  var html = '<table><thead><tr><th>Round</th><th>Pick</th><th class="l">Take one of'
+    + '</th><th>ADP</th><th>Still there</th><th>We project</th><th>ESPN</th>'
+    + '<th>Over replacement</th></tr></thead><tbody>';
+  for (var r = 0; r < rows.length; r++) {
+    var row = rows[r];
+    for (var o = 0; o < row.options.length; o++) {
+      var opt = row.options[o], p = opt.row.p;
+      var first = o === 0;
+      /* The rule under a ROUND, not under every option — the three names in a round
+         are one suggestion, and a line between them says they are three suggestions. */
+      html += '<tr' + (o < row.options.length - 1 ? ' class="nb"' : '') + '>'
+        + (first ? '<td rowspan="' + row.options.length + '"><b>' + row.round + '</b>'
+             + (row.forced ? '<br><span class="slot">must fill</span>' : '') + '</td>'
+             + '<td rowspan="' + row.options.length + '">' + row.pick + '</td>' : '')
+        + '<td class="l"' + teamStyle(p.team) + '>' + chip(p.position) + esc(p.name)
+        + ' ' + teamBadge(p.team) + '</td>'
+        + '<td>' + opt.row.adp.toFixed(0) + '</td>'
+        + '<td>' + chanceCell(opt.chance) + '</td>'
+        + '<td>' + opt.row.pts.toFixed(0) + '</td>'
+        + '<td>' + (opt.row.espn ? opt.row.espn.toFixed(0) : '—') + '</td>'
+        + '<td><b>' + opt.row.vor.toFixed(0) + '</b></td></tr>';
+    }
+  }
+  host.innerHTML = html + '</tbody></table>';
+
+  note.innerHTML = '<b>What "still there" means.</b> The consensus board publishes an '
+    + 'average draft position <i>and the spread around it</i>, measured across <b>'
+    + report.drafts.toLocaleString() + '</b> real drafts taken in the week to <b>'
+    + esc(String(report.snapshot)) + '</b>. So this is not a feel about who lasts: it is '
+    + 'that player’s own distribution, asked whether it clears your pick number. '
+    + 'Jahmyr Gibbs goes 1.5 with a spread of 0.7 and is gone by pick 4; a sixth-round '
+    + 'receiver swings seven or eight picks either way, which is why the list gets '
+    + 'longer and less certain as it goes down.'
+    + '<br><br><b>Three names, not one, and the order is ours not the board’s.</b> '
+    + 'They are ranked by points over replacement at this league size — what the pick '
+    + 'is worth against the man you could have anyway — so a name further down the '
+    + 'consensus board can lead the row. Anything under a '
+    + Math.round(PLAN_MIN_CHANCE * 100) + '% chance of lasting is not shown, because a '
+    + 'plan built on the pick before yours going wrong is not a plan.'
+    + '<br><br><b>Each round assumes you took the first name in the round above</b> — '
+    + 'otherwise every row lists the same three men, and the point of the table is that '
+    + 'round four depends on rounds one to three. The board thins by itself as the pick '
+    + 'numbers rise. Where a row says <span class="slot">must fill</span>, the rounds '
+    + 'left have run down to the starters you still need and only those are offered.'
+    + '<br><br><b>Only one quarterback and one tight end appear in these ten rounds</b>, '
+    + 'and that is deliberate. Over-replacement value is measured against the man who '
+    + 'would otherwise start, so it is true of the first one you take and false of the '
+    + 'second: your backup quarterback starts nowhere. Without the cap the list spent '
+    + 'four premium picks on two startable players.'
+    + '<br><br><b>Where this disagrees with the backtest below, read both.</b> If a '
+    + 'tight end leads one of your early rounds it is because this year’s top one is '
+    + 'genuinely scarce at the position, and the table further down says a forced '
+    + '<i>TE round 1</i> finished 6.76 against a 6.50 line. Those are not in conflict: '
+    + 'that rule spends a first-round pick on a tight end <b>every</b> season, including '
+    + 'the ones with no elite tight end in them, and the rosters that actually opened '
+    + 'at the position posted 5.94. The rule is bad; the player may not be.'
+    + '<br><br><b>Over-replacement goes negative in the later rounds, and that is the '
+    + 'information.</b> By round eight in a twelve-team league everyone left is behind '
+    + 'the man you could claim off waivers in October — which is what makes those picks '
+    + 'bench and upside rather than lineup, whatever the projection beside them says.'
+    + '<br><br><b>The ESPN column is ESPN’s number in ESPN’s scoring</b>, '
+    + 'carried across untouched so it matches what their site shows you — not rescored '
+    + 'under your settings, which would make it a third opinion of ours rather than a '
+    + 'second opinion of theirs. Ours is lower on purpose: it multiplies a per-game '
+    + 'rate by the games a player is actually expected to play, where seventeen weekly '
+    + 'projections added up describe a season nobody has. '
+    + esc(DRAFT.caveat || '');
+}
+
+/* ------------------------------------------------------------------ *
+ * LEAGUE DRAFT RECAP — every team in the room, on one scale.
+ *
+ * The report card above answers "how did I do"; this answers "who else is any good",
+ * which is the other half and the half you argue about. Same machinery: each roster's
+ * optimal lineup re-optimised every remaining week under YOUR scoring and YOUR slots.
+ *
+ * It is a recap of ROSTERS, not of the draft board — the import gives us who owns whom
+ * today, not who was taken where. In the days after a draft those are the same thing;
+ * by November they are not, and the note says so rather than letting the heading imply
+ * otherwise.
+ * ------------------------------------------------------------------ */
+
+/* What a pick at this point on the board is normally worth, so a team's picks can be
+   priced rather than just listed. Median VOR by round, over everyone the consensus
+   board carries — the same idea as roi.py's cost curve, done live because VOR depends
+   on the league size on screen. */
+function adpValueCurve(teams) {
+  var byRound = {}, id, consensus = DRAFT.consensus || {};
+  for (id in consensus) {
+    if (!Object.prototype.hasOwnProperty.call(consensus, id)) continue;
+    var vor = (DRAFT.vor[id] || {})[teams];
+    if (vor === undefined) continue;
+    var round = Math.max(1, Math.ceil(consensus[id][0] / teams));
+    (byRound[round] = byRound[round] || []).push(vor);
+  }
+  var curve = {};
+  for (var r in byRound) {
+    if (Object.prototype.hasOwnProperty.call(byRound, r)) curve[r] = median(byRound[r]);
+  }
+  return curve;
+}
+
+/* The same starters, priced by both sources — and it has to be MATCHED PAIRS.
+   The lineup is ours on purpose: re-optimising under ESPN's projections would introduce
+   a second difference (different starters as well as different numbers) and the
+   question this column answers is what the other source says about the same team.
+
+   ESPN DOES NOT PROJECT EVERYBODY, and the first version of this ignored that. It
+   added ESPN's number for whichever starters had one and compared the result against
+   OUR total for all nine — so a lineup where four men were priced and five were not
+   came out a third of its true size, and the card reported ESPN as thirty points a week
+   BELOW us when the entire point of the column is that they are above. Kickers and
+   defences are the usual gap. Both totals are now summed over exactly the starters
+   ESPN prices, and the coverage is returned so a thin comparison can decline to make a
+   claim rather than making a wrong one. */
+function sourceCompare(ids, weeks) {
+  var byWeek = weeklyEntries(ids, weeks);
+  var ours = 0, espn = 0, covered = 0, starters = 0;
+  for (var w = 0; w < byWeek.length; w++) {
+    var lineup = optimize(byWeek[w]).lineup;
+    for (var i = 0; i < lineup.length; i++) {
+      var entry = lineup[i].entry;
+      if (!entry) continue;
+      starters++;
+      if (!entry.week.espn_points) continue;
+      covered++;
+      espn += entry.week.espn_points;
+      ours += entry.points;
+    }
+  }
+  return { ours: ours, espn: espn, covered: covered, starters: starters };
+}
+
+/* Below this share of the starting lineup, the two sources are not describing the same
+   team and no gap is reported. */
+var SOURCE_MIN_COVER = 0.6;
+
+var recapMemo = { key: null, value: null };
+
+function draftRecap(teams) {
+  if (!LEAGUE || !LEAGUE.teams || !LEAGUE.teams.length) return null;
+  var key = scoringKey() + '|' + leagueKey(LEAGUE) + '|' + LEAGUE.teams.length
+    + '|' + teams + '|' + state.roster.join(',');
+  if (recapMemo.key === key) return recapMemo.value;
+
+  var weeks = remainingWeeks(), curve = adpValueCurve(teams), consensus = DRAFT.consensus || {};
+  var mine = myTeamIndex(), rows = [], t, i;
+  for (t = 0; t < LEAGUE.teams.length; t++) {
+    var ids = (t === mine) ? state.roster : (LEAGUE.teams[t].players || []);
+    if (!ids.length) continue;
+    var split = squadBySlot(ids, weeks);
+    var pair = sourceCompare(ids, weeks);
+    var cover = pair.starters ? pair.covered / pair.starters : 0;
+
+    /* Best and worst pick, priced against what that spot on the board normally
+       returns. A player nobody drafted has no price, so he cannot be a steal here. */
+    var best = null, worst = null, onBoard = 0;
+    for (i = 0; i < ids.length; i++) {
+      var p = BY_ID[ids[i]], entry = consensus[ids[i]];
+      if (!p || !entry) continue;
+      var vor = (DRAFT.vor[ids[i]] || {})[teams];
+      if (vor === undefined) continue;
+      onBoard++;
+      var round = Math.max(1, Math.ceil(entry[0] / teams));
+      var surplus = vor - (curve[round] === undefined ? 0 : curve[round]);
+      var item = { p: p, adp: entry[0], round: round, vor: vor, surplus: surplus };
+      if (!best || surplus > best.surplus) best = item;
+      if (!worst || surplus < worst.surplus) worst = item;
+    }
+    /* ONE PRICED PLAYER CANNOT BE BOTH THE BEST AND THE WORST PICK, and printing him
+       twice on one row looked like a bug because it was one. */
+    if (onBoard < 2) worst = null;
+    rows.push({
+      index: t, name: (t === mine) ? 'Your team' : LEAGUE.teams[t].name, mine: t === mine,
+      total: split.total, perWeek: split.total / weeks.length,
+      /* Scaled back up to a full lineup, so the column is comparable with ours beside
+         it: ESPN's rate over the starters it prices, applied to every starter. */
+      espnWeek: cover >= SOURCE_MIN_COVER
+        ? (pair.espn / pair.covered) * (pair.starters / weeks.length) : null,
+      gap: cover >= SOURCE_MIN_COVER
+        ? (pair.espn - pair.ours) / pair.covered * (pair.starters / weeks.length) : null,
+      cover: cover,
+      best: best, worst: worst, onBoard: onBoard, size: ids.length
+    });
+  }
+  rows.sort(function (a, b) { return b.total - a.total; });
+  for (i = 0; i < rows.length; i++) rows[i].rank = i + 1;
+  var value = { rows: rows, weeks: weeks.length };
+  recapMemo = { key: key, value: value };
+  return value;
+}
+
+function renderDraftRecap(teams) {
+  var host = document.getElementById('draftRecap');
+  var note = document.getElementById('draftRecapNote');
+  var recap = draftRecap(teams);
+  if (!recap) {
+    host.innerHTML = '<div class="empty">Import your league on the Roster tab and every '
+      + 'team in it gets ranked here, under your scoring and your slots.</div>';
+    note.innerHTML = 'A recap of a room needs the room. Nothing here can be simulated '
+      + 'from a field of strangers — that is what the backtest below is for.';
+    return;
+  }
+  var rows = recap.rows, spread = rows[0].perWeek - rows[rows.length - 1].perWeek;
+  var html = '<table><thead><tr><th>#</th><th class="l">Team</th>'
+    + '<th>A week</th><th>Rest of season</th><th>ESPN’s number</th>'
+    + '<th class="l">Best pick for the price</th>'
+    + '<th class="l">Worst</th></tr></thead><tbody>';
+  for (var r = 0; r < rows.length; r++) {
+    var row = rows[r];
+    html += '<tr' + (row.mine ? ' class="nb"' : '') + '><td>' + row.rank + '</td>'
+      + '<td class="l"><b>' + esc(row.name) + '</b>'
+      + (row.mine ? ' <span class="tag good">you</span>' : '') + '</td>'
+      + '<td><b>' + row.perWeek.toFixed(1) + '</b></td>'
+      + '<td>' + row.total.toFixed(0) + '</td>'
+      + '<td>' + (row.espnWeek === null ? '—' : row.espnWeek.toFixed(1)) + '</td>'
+      + '<td class="l">' + pickCell(row.best) + '</td>'
+      + '<td class="l">' + pickCell(row.worst) + '</td></tr>';
+  }
+  host.innerHTML = html + '</tbody></table>';
+
+  var top = rows[0], me = null;
+  for (var m = 0; m < rows.length; m++) if (rows[m].mine) me = rows[m];
+  var lines = [];
+  lines.push('<b>' + esc(top.name) + '</b> comes out of it best, at <b>'
+    + top.perWeek.toFixed(1) + '</b> points a week of startable lineup over the '
+    + 'remaining ' + recap.weeks + ' weeks'
+    + (me && !me.mine ? '' : (me ? ', against your ' + me.perWeek.toFixed(1) : ''))
+    + '. Best to worst in this league is <b>' + spread.toFixed(1)
+    + '</b> points a week, which is the number worth holding on to: it is the size of '
+    + 'the head start the draft actually handed out, before a single waiver claim.');
+
+  /* THE NUMBER PEOPLE QUOTE IS THE OTHER SITE'S, AND THE GAP IS NOT AN ERROR. */
+  var gaps = [], g;
+  for (g = 0; g < rows.length; g++) {
+    if (rows[g].gap !== null) gaps.push(rows[g].gap);
+  }
+  if (gaps.length) {
+    var mid = median(gaps), side = mid >= 0 ? 'above' : 'below';
+    lines.push('<b>Why ESPN’s number differs from ours, and which one to believe.</b> '
+      + 'Across these ' + gaps.length + ' teams ESPN’s own projections for the very '
+      + 'same starters run <b>' + Math.abs(mid).toFixed(1) + '</b> points a week '
+      + side + ' ours — compared player by player, over only the starters ESPN prices, '
+      + 'so a lineup it does not fully cover cannot drag the total down. '
+      + (Math.abs(mid) < 3
+          ? 'That is close enough to call agreement: <b>week to week the two of us are '
+            + 'describing the same team.</b> '
+          : '')
+      + '<b>Where a much bigger number comes from is the season, not the week.</b> If '
+      + 'you have been quoted something well above the left-hand column, it is almost '
+      + 'certainly a full-season figure built by adding up weekly projections — and '
+      + 'eighteen weekly projections describe a season in which nobody misses a game. '
+      + 'Ours multiplies a per-game rate by the games a player is actually expected to '
+      + 'play, which for a starting back is about fourteen of seventeen. Neither is '
+      + 'wrong; they answer different questions, and this table asks the weekly one so '
+      + 'that a bye and a thin bench show up where they actually bite. '
+      + 'The ESPN column is <b>ESPN’s scoring, not yours</b>, for the same reason it '
+      + 'is here at all: it is the number you were quoted. Where a team is blank, ESPN '
+      + 'prices too few of its starters for a comparison to mean anything.');
+  }
+  lines.push('<b>"Best pick for the price" is surplus, not points.</b> Every player is '
+    + 'priced at what a pick in his round of the consensus board normally returns, and '
+    + 'the surplus is what he beats it by — so a first-round back scoring the most '
+    + 'points in the league is not a steal, and a ninth-round receiver who starts every '
+    + 'week is. Players nobody drafted carry no price and cannot appear.');
+  lines.push('<b>This is a recap of ROSTERS, not of the draft board.</b> An import says '
+    + 'who owns whom today, not who was taken where — so in the days after a draft this '
+    + 'is your draft, and by November it is your draft plus every trade and waiver '
+    + 'claim since. It is also all one projection set: every team is graded with the '
+    + 'same numbers, so this measures how the room was built, not who is right about '
+    + 'the players.');
+  note.innerHTML = lines.join(' ');
+}
+
+function pickCell(item) {
+  if (!item) return '<span class="slot">—</span>';
+  return chip(item.p.position) + esc(item.p.name)
+    + '<br><span class="subtext">round ' + item.round + ' · '
+    + (item.surplus >= 0 ? '+' : '') + item.surplus.toFixed(0) + ' on the price</span>';
+}
+
+/* A probability that reads as a probability. Bare percentages in a column of points
+   totals get read as points. */
+function chanceCell(chance) {
+  var pct = Math.round(chance * 100);
+  var cls = pct >= 75 ? 'good' : (pct >= 45 ? 'warn' : 'bad');
+  return '<span class="tag ' + cls + '">' + pct + '%</span>';
+}
+
 function renderDraftPlan(slot, teams, plan, size) {
   var host = document.getElementById('draftPlan');
   if (!DRAFT_HIST) {
@@ -7263,6 +7734,10 @@ function renderDraft() {
   if (!plan) return;
 
   renderDraftPlan(slot, teams, plan, size);
+  renderPickPlan(slot, teams, size);
+  /* Only while the tab is open, like the report card above it and for the same reason:
+     it optimises every roster in the league across every remaining week, twice. */
+  if (currentView === 'draft') renderDraftRecap(teams);
   renderWinners();
   renderDuels();
   renderDraftRoi();
