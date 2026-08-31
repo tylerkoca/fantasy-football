@@ -546,6 +546,26 @@
      Its own class rather than `.sub`, which is only ever an h3 and would have given
      this nothing at all. */
   .subtext { font-size: 11px; color: var(--dim); }
+  /* A name in a tier: a chip-sized pill so a tier of six reads as one row of six
+     things rather than as a sentence. */
+  .tiername {
+    display: inline-block; padding: 3px 8px; border-radius: 6px; font-size: 12px;
+    background: color-mix(in srgb, var(--team, var(--line)) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--team, var(--line)) 40%, transparent);
+  }
+  /* The break between tiers, and the reason the tier list exists: it says what waiting
+     costs, in the same points as the column above it. */
+  .tiergap {
+    font-size: 11px; color: var(--dim); font-weight: 700; letter-spacing: .4px;
+    text-transform: uppercase; margin: 2px 0 2px 104px; padding-left: 10px;
+    border-left: 3px solid color-mix(in srgb, var(--critical) 55%, transparent);
+  }
+  /* A break under a point a week is real arithmetic and not worth reaching for, so it
+     is drawn as the faint thing it is rather than in the same red as a genuine cliff. */
+  .tiergap.slight {
+    border-left-color: color-mix(in srgb, var(--line) 70%, transparent);
+    text-transform: none; letter-spacing: 0; font-weight: 400;
+  }
   /* A sub-heading inside a card, for a section that is part of the same argument as
      the table above it rather than a new one deserving its own card. */
   h3.sub {
@@ -858,6 +878,35 @@
       <div class="note" id="seasonRankNote" hidden></div>
     </div>
 
+    <!-- DRAFT DAY LIVES HERE, NOT ON THE DRAFT TAB. What replaced the pick planner:
+         that one answered "who should I take at pick 31" and had to assume you took
+         its previous suggestion, which meant one refusal could close a position off
+         for the rest of the draft. A board assumes nothing. -->
+    <div class="card">
+      <h2>Draft board
+        <span class="tag" id="boardSpan">real drafts, this week</span></h2>
+      <div class="row" style="margin-bottom:10px;align-items:flex-end">
+        <div>
+          <label for="boardfmt">Scoring</label>
+          <select id="boardfmt"></select>
+        </div>
+        <div>
+          <label for="boardrounds">Through round</label>
+          <select id="boardrounds">
+            <option>5</option><option selected>10</option><option>15</option>
+          </select>
+        </div>
+      </div>
+      <div class="scroll" id="draftBoardFull" style="max-height:720px"></div>
+      <div class="note" id="draftBoardNote"></div>
+    </div>
+
+    <div class="card">
+      <h2>Tiers, by position
+        <span class="tag" id="tierSpan">where the board actually breaks</span></h2>
+      <div id="tierList"></div>
+      <div class="note" id="tierNote"></div>
+    </div>
   </section>
 
   <section class="view" id="view-waivers" hidden>
@@ -988,12 +1037,6 @@
         </div>
       </div>
       <div id="draftPlan"></div>
-      <!-- The same two controls drive this: it is the same seat, answered with names
-           instead of strategy labels. A drafter on the clock wants "who", and the
-           table above only ever said "what kind of player". -->
-      <h3 class="sub">Who to take at each of your picks</h3>
-      <div class="scroll" id="pickPlan"></div>
-      <div class="note" id="pickPlanNote"></div>
     </div>
     <div class="card" id="recapCard">
       <h2>League draft recap
@@ -6730,253 +6773,346 @@ function renderReportCard() {
    real drafts, and the grade is what actually happened that season. A constraint CAN
    beat best-available here, so a rank is a real answer. See history.py. */
 /* ------------------------------------------------------------------ *
- * WHO TO TAKE, PICK BY PICK.
+ * THE DRAFT BOARD — the whole room's order, round by round.
  *
- * The strategy table above this answers "what KIND of player from this seat", which is
- * the honest answer to the question it was asked and is not what somebody on the clock
- * needs. This names men.
+ * This replaced a pick planner that named three targets per pick. The planner had to
+ * assume you took its first suggestion each round in order to say anything about the
+ * next one, and that assumption is what broke it: cap the roster at one quarterback,
+ * let it take Josh Allen in round three, and no quarterback is ever offered again — so
+ * a drafter who passed on Allen got no help at the position for the rest of the draft.
+ * A board assumes nothing about what you did. It shows where the room takes people and
+ * what we think they are worth, and lets you disagree at any pick without the page
+ * losing track.
  *
- * The whole thing turns on one number the rest of this repo had flagged as missing and
- * kept guessing at: the measured SPREAD of where a player actually goes.
- * Fantasy Football Calculator publishes it per player alongside the consensus average,
- * over every real draft taken in the last week — 8,000-odd of them at this time of
- * year — so "will he still be there at pick 31?" stops being a feel and becomes
- * P(draft slot > 31) read off that player's own distribution. `draft.py`'s
- * `ADP_NOISE_FRAC` had to assume a constant fraction of ADP; this does not have to.
+ * THREE BOARDS, NOT ONE. Receivers and pass-catching backs move earlier the more a
+ * reception is worth, so a standard-league drafter reading a PPR board is being shown
+ * the wrong order. The endpoint publishes all three, measured separately — 8,161 PPR
+ * drafts, 3,208 half, 1,884 standard in the week to the snapshot — and the selector
+ * changes OUR numbers too, because a projection with a point per reception in it is
+ * answering the same wrong question.
  * ------------------------------------------------------------------ */
 
-/* Normal CDF, Abramowitz & Stegun 26.2.17 — five terms, |error| < 7.5e-8, which is
-   four orders of magnitude tighter than a draft-position spread measured to one
-   decimal place. */
-function normalCdf(z) {
-  var sign = z < 0 ? -1 : 1, x = Math.abs(z) / Math.SQRT2;
-  var t = 1 / (1 + 0.3275911 * x);
-  var y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
-                - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
-  return 0.5 * (1 + sign * y);
-}
+var BOARD_TEAMS = 12;
+/* Standard starters, because the board is about a generic 12-team room rather than
+   about your league's slots — those live on Settings and drive every other tab. */
+var BOARD_STARTERS = { QB: 1, RB: 2, WR: 2, TE: 1 };
+var BOARD_FLEX = 1;
+var FORMAT_LABEL = { full_ppr: 'Full PPR', half_ppr: 'Half PPR', standard: 'Standard' };
 
-/* The chance this player is still on the board when the pick comes round.
-
-   THE QUESTION IS ABOUT THE PICKS BEFORE YOURS, NOT ABOUT YOUR OWN. Asking
-   P(his slot > pick) said Jahmyr Gibbs — average draft position 1.5 — was only 76% to
-   be available to the man holding pick ONE, where nothing whatever has been drafted
-   yet and the answer is certainly 1. The number of picks that can take him is
-   `pick - 1`, so that is what his distribution is asked about; at the first overall
-   pick that is zero picks and everybody is there. */
-function stillThere(pick, adp, sd) {
-  var before = pick - 1;
-  if (!sd) return before < adp ? 1 : 0;
-  var chance = 1 - normalCdf((before - adp) / sd);
-  return chance < 0 ? 0 : (chance > 1 ? 1 : chance);
-}
-
-/* Which overall picks belong to this seat, snaking. */
-function seatPicks(slot, teams, rounds) {
-  var out = [];
-  for (var r = 1; r <= rounds; r++) {
-    var within = (r % 2) ? slot : (teams - slot + 1);
-    out.push({ round: r, pick: (r - 1) * teams + within });
-  }
+/* Which boards this build actually carries. A format the endpoint could not serve is
+   absent rather than empty, so the selector offers only what exists. */
+function boardFormats() {
+  var out = [], all = ['full_ppr', 'half_ppr', 'standard'], i;
+  var boards = (DRAFT && DRAFT.consensus) || {};
+  for (i = 0; i < all.length; i++) if (boards[all[i]]) out.push(all[i]);
   return out;
 }
 
-/* ESPN's own season projection for a player: their weekly numbers added up.
-   IN ESPN'S SCORING, NOT YOURS, and that is the point of showing it — it is the number
-   on their site, carried across unchanged so it can be compared with the one they
-   print. Rescoring it under this page's config would make it a third opinion of ours
-   rather than a second opinion of theirs. Bye weeks are absent from the feed rather
-   than zero, so this is already a 17-game total; it still assumes he plays all of
-   them, which is exactly why it runs above ours. */
-function espnSeason(player) {
-  var total = 0, week;
-  for (week in player.weeks) {
-    if (!Object.prototype.hasOwnProperty.call(player.weeks, week)) continue;
-    var w = player.weeks[week];
-    if (w && !w.is_bye && w.espn_points) total += w.espn_points;
-  }
-  return total;
+function currentBoardFormat() {
+  var pick = document.getElementById('boardfmt');
+  var have = boardFormats();
+  if (!have.length) return null;
+  if (pick && pick.value && DRAFT.consensus[pick.value]) return pick.value;
+  /* Default to the scoring this league actually uses, so the first thing a drafter
+     sees is their own board rather than one they have to notice and change. */
+  for (var i = 0; i < have.length; i++) if (have[i] === state.format) return have[i];
+  return have[0];
 }
 
-/* Roster shape the plan drafts toward. Not the user's slots: this card is about a
-   generic draft from a chosen seat, the same scope as the two selects above it, and
-   the VOR it ranks on is `draft.py`'s under standard starters. Caps stop the list
-   recommending a fourth quarterback once the obvious ones are gone. */
-/* ONE QUARTERBACK AND ONE TIGHT END, and the cap is doing real work rather than
-   tidying. Value over replacement says Jalen Hurts is worth 41 points and Kyle Pitts
-   42, and both numbers are true of the FIRST one you draft: they are measured against
-   a replacement who would otherwise start. The second one starts nowhere. Allowing two
-   had the planner spend round three on Josh Allen and round five on Hurts, and round
-   two on Trey McBride and round four on Colston Loveland — four premium picks for two
-   startable players. It is the same defect the Trades tab is written to explain,
-   arriving from the other direction: upgrading a slot you have already filled is the
-   most expensive thing you can do, because it feels like winning.
+/* A copy of the user's scoring with only the reception value swapped, so their own
+   touchdown values and bonuses survive the format switch. Changing `rec` alone is what
+   separates the three formats; everything else is the league's own business. */
+function boardConfig(fmt) {
+  var config = cloneConfig(state.config);
+  config.per_stat.rec = RECEPTION[fmt];
+  return config;
+}
 
-   Backs and receivers are capped loosely instead of at their starter counts, because
-   the flex is real and so is a bye week. */
-var PLAN_CAP = { QB: 1, RB: 4, WR: 4, TE: 1 };
-var PLAN_ROUNDS = 10;
-var PLAN_MIN_CHANCE = 0.25;
-var PLAN_SHOW = 3;
+/* Season projection under a given config: a per-game rate times the games he is
+   expected to play, which is the same arithmetic draft.py uses and for the same
+   reason — eighteen weekly projections added up describe a season nobody has. */
+var boardMemo = { key: null, value: null };
 
-/* Starters you must come out of a draft with. Once the rounds left equal the holes
-   left, the plan stops offering luxuries — which is the one piece of draft logic that
-   is not a matter of taste. */
-var PLAN_NEED = { QB: 1, RB: 2, WR: 2, TE: 1 };
-
-function pickPlanRows(slot, teams, size) {
-  var consensus = DRAFT.consensus || {};
-  var pool = [], i;
+function boardRows(fmt) {
+  var key = fmt + '|' + scoringKey();
+  if (boardMemo.key === key) return boardMemo.value;
+  var config = boardConfig(fmt), board = DRAFT.consensus[fmt] || {};
+  var rows = [], i, week;
   for (i = 0; i < PLAYERS.length; i++) {
-    var p = PLAYERS[i], entry = consensus[p.gsis_id];
-    if (!entry) continue;
-    var vor = (DRAFT.vor[p.gsis_id] || {})[teams];
-    if (vor === undefined) continue;
-    if (!PLAN_CAP[p.position]) continue;   // kickers and defences are not plan material
-    pool.push({ p: p, adp: entry[0], sd: entry[1], drafts: entry[2], vor: vor,
-                pts: DRAFT.season_points[p.gsis_id] || 0, espn: espnSeason(p) });
+    var p = PLAYERS[i], total = 0, played = 0;
+    for (week in p.weeks) {
+      if (!Object.prototype.hasOwnProperty.call(p.weeks, week)) continue;
+      var w = p.weeks[week];
+      if (!w || w.is_bye) continue;
+      var points = Scoring.score(w.stats || {}, config);
+      if (points > 0) { total += points; played++; }
+    }
+    if (!played) continue;
+    var games = (DRAFT.games || {})[p.gsis_id];
+    if (!games) continue;
+    var entry = board[p.gsis_id];
+    rows.push({ p: p, season: (total / played) * games, perGame: total / played,
+                games: games, adp: entry ? entry[0] : null,
+                sd: entry ? entry[1] : null, drafts: entry ? entry[2] : null });
   }
-  pool.sort(function (a, b) { return b.vor - a.vor; });
-
-  var picks = seatPicks(slot, teams, PLAN_ROUNDS), taken = {}, have = {}, rows = [];
-  for (i = 0; i < picks.length; i++) {
-    var pick = picks[i];
-    /* Holes left against rounds left. When they are equal every remaining pick is
-       spoken for, so nothing outside the need list is offered. */
-    var holes = 0, pos;
-    for (pos in PLAN_NEED) {
-      if (Object.prototype.hasOwnProperty.call(PLAN_NEED, pos)) {
-        holes += Math.max(0, PLAN_NEED[pos] - (have[pos] || 0));
+  /* Replacement level under THIS scoring, so value over replacement moves with the
+     format exactly as the projections do. The flex is charged to whichever pool has
+     the better next man, the same rule `leagueStarters` uses. */
+  var byPos = {};
+  for (i = 0; i < rows.length; i++) {
+    (byPos[rows[i].p.position] = byPos[rows[i].p.position] || []).push(rows[i].season);
+  }
+  var pos;
+  for (pos in byPos) {
+    if (Object.prototype.hasOwnProperty.call(byPos, pos)) {
+      byPos[pos].sort(function (a, b) { return b - a; });
+    }
+  }
+  var need = {}, flexLeft = BOARD_FLEX * BOARD_TEAMS;
+  for (pos in BOARD_STARTERS) {
+    if (Object.prototype.hasOwnProperty.call(BOARD_STARTERS, pos)) {
+      need[pos] = BOARD_STARTERS[pos] * BOARD_TEAMS;
+    }
+  }
+  while (flexLeft > 0) {
+    var best = null, bestPos = null;
+    for (pos in need) {
+      if (!Object.prototype.hasOwnProperty.call(need, pos)) continue;
+      if (!FLEX_OK[pos]) continue;
+      var next = (byPos[pos] || [])[need[pos]];
+      if (next !== undefined && (best === null || next > best)) {
+        best = next; bestPos = pos;
       }
     }
-    var forced = holes >= (picks.length - i);
-
-    var options = [];
-    for (var j = 0; j < pool.length && options.length < PLAN_SHOW; j++) {
-      var cand = pool[j];
-      if (taken[cand.p.gsis_id]) continue;
-      if ((have[cand.p.position] || 0) >= PLAN_CAP[cand.p.position]) continue;
-      if (forced && (have[cand.p.position] || 0) >= (PLAN_NEED[cand.p.position] || 0)) {
-        continue;
-      }
-      var chance = stillThere(pick.pick, cand.adp, cand.sd);
-      if (chance < PLAN_MIN_CHANCE) continue;
-      options.push({ row: cand, chance: chance });
-    }
-    if (!options.length) break;
-    rows.push({ round: pick.round, pick: pick.pick, options: options, forced: forced });
-
-    /* THE PLAN HAS TO COMMIT TO SOMETHING OR EVERY ROUND LISTS THE SAME THREE MEN.
-       It takes its own first suggestion and moves on, which is what makes round four's
-       list depend on rounds one to three.
-
-       Nothing else needs removing. The board thins by itself, because `stillThere`
-       falls as the pick number rises: anyone failing the chance test at this pick
-       fails it at every later one. An earlier version also swept the pool after each
-       pick and marked those men taken, which read like it was doing work and was
-       exactly equivalent to the filter a few lines up. */
-    var chosen = options[0].row;
-    taken[chosen.p.gsis_id] = true;
-    have[chosen.p.position] = (have[chosen.p.position] || 0) + 1;
+    if (!bestPos) break;
+    need[bestPos]++;
+    flexLeft--;
   }
-  return rows;
+  var replacement = {};
+  for (pos in need) {
+    if (!Object.prototype.hasOwnProperty.call(need, pos)) continue;
+    var list = byPos[pos] || [];
+    replacement[pos] = list[need[pos]] !== undefined ? list[need[pos]]
+                                                     : (list[list.length - 1] || 0);
+  }
+  for (i = 0; i < rows.length; i++) {
+    rows[i].vor = rows[i].season - (replacement[rows[i].p.position] === undefined
+                                    ? 0 : replacement[rows[i].p.position]);
+  }
+  var value = { rows: rows, replacement: replacement, need: need };
+  boardMemo = { key: key, value: value };
+  return value;
 }
 
-function renderPickPlan(slot, teams, size) {
-  var host = document.getElementById('pickPlan');
-  var note = document.getElementById('pickPlanNote');
-  var report = DRAFT.consensus_report || {};
-  if (!DRAFT.consensus || !report.drafts) {
-    host.innerHTML = '<div class="empty">No consensus board in this build — the '
-      + 'planner needs one, because "will he be there?" is a question about real '
-      + 'drafts.</div>';
+/* TIERS: WHERE THE BOARD ACTUALLY BREAKS, AND THE THRESHOLD IS DERIVED.
+   A tier list is only worth anything if the breaks are real, and "real" has to be
+   measured rather than eyeballed. Within a position, take the drop from each player to
+   the next and find the MEDIAN drop — that is what an ordinary step down the board
+   costs at this position, in this scoring. A break is a step that costs more than
+   twice that. So the threshold adapts: quarterbacks step down gently and break in a
+   few obvious places, running backs fall off a shelf early, and switching to standard
+   scoring moves both because the projections underneath move.
+
+   The median drop is printed beside each position, so the reader can see what the
+   threshold was rather than trusting a number nobody shows them.
+
+   THE MULTIPLE IS CHOSEN BY MEASUREMENT, NOT BY TASTE. Sweeping it over the emitted
+   board gives tier counts of:
+
+       multiple    QB    RB    WR    TE
+          2.0x      7    14    13     6
+          2.5x      5     9    12     5
+          3.0x      4     9    10     4
+          4.0x      2     7     9     4
+          6.0x      2     5     5     2
+
+   Two is not a threshold, it is a rounding error on the typical step — fourteen
+   running back tiers is a ranked list wearing a hat. Four collapses quarterback to two
+   tiers, which hides the one break at that position anybody cares about. Three is the
+   only multiple that leaves every position with tiers of four to six men, which is the
+   size a drafter can actually hold in their head while the clock runs. */
+var TIER_BREAK = 3.0;
+var TIER_DEPTH = { QB: 24, RB: 42, WR: 48, TE: 24 };
+
+function tiersFor(rows, position) {
+  var pool = [], i;
+  for (i = 0; i < rows.length; i++) {
+    if (rows[i].p.position === position) pool.push(rows[i]);
+  }
+  pool.sort(function (a, b) { return b.season - a.season; });
+  pool = pool.slice(0, TIER_DEPTH[position] || 36);
+  if (pool.length < 4) return null;
+
+  var drops = [];
+  for (i = 0; i < pool.length - 1; i++) drops.push(pool[i].season - pool[i + 1].season);
+  var typical = median(drops);
+  var bar = typical * TIER_BREAK;
+
+  var tiers = [[pool[0]]];
+  for (i = 1; i < pool.length; i++) {
+    if (pool[i - 1].season - pool[i].season > bar) tiers.push([]);
+    tiers[tiers.length - 1].push(pool[i]);
+  }
+  return { tiers: tiers, typical: typical, bar: bar, n: pool.length };
+}
+
+function renderDraftBoard() {
+  var host = document.getElementById('draftBoardFull');
+  var note = document.getElementById('draftBoardNote');
+  var pick = document.getElementById('boardfmt');
+  var have = boardFormats();
+  if (!have.length) {
+    host.innerHTML = '<div class="empty">No consensus board in this build.</div>';
     note.innerHTML = '';
+    document.getElementById('tierList').innerHTML = '';
+    document.getElementById('tierNote').innerHTML = '';
     return;
   }
-  var rows = pickPlanRows(+slot, +teams, size);
-  if (!rows.length) {
-    host.innerHTML = '<div class="empty">Nothing to plan from this seat.</div>';
-    note.innerHTML = '';
-    return;
-  }
-  var html = '<table><thead><tr><th>Round</th><th>Pick</th><th class="l">Take one of'
-    + '</th><th>ADP</th><th>Still there</th><th>We project</th><th>ESPN</th>'
-    + '<th>Over replacement</th></tr></thead><tbody>';
-  for (var r = 0; r < rows.length; r++) {
-    var row = rows[r];
-    for (var o = 0; o < row.options.length; o++) {
-      var opt = row.options[o], p = opt.row.p;
-      var first = o === 0;
-      /* The rule under a ROUND, not under every option — the three names in a round
-         are one suggestion, and a line between them says they are three suggestions. */
-      html += '<tr' + (o < row.options.length - 1 ? ' class="nb"' : '') + '>'
-        + (first ? '<td rowspan="' + row.options.length + '"><b>' + row.round + '</b>'
-             + (row.forced ? '<br><span class="slot">must fill</span>' : '') + '</td>'
-             + '<td rowspan="' + row.options.length + '">' + row.pick + '</td>' : '')
-        + '<td class="l"' + teamStyle(p.team) + '>' + chip(p.position) + esc(p.name)
-        + ' ' + teamBadge(p.team) + '</td>'
-        + '<td>' + opt.row.adp.toFixed(0) + '</td>'
-        + '<td>' + chanceCell(opt.chance) + '</td>'
-        + '<td>' + opt.row.pts.toFixed(0) + '</td>'
-        + '<td>' + (opt.row.espn ? opt.row.espn.toFixed(0) : '—') + '</td>'
-        + '<td><b>' + opt.row.vor.toFixed(0) + '</b></td></tr>';
+  if (pick.options.length !== have.length) {
+    var opts = '', i;
+    for (i = 0; i < have.length; i++) {
+      opts += '<option value="' + have[i] + '">' + FORMAT_LABEL[have[i]] + '</option>';
     }
+    pick.innerHTML = opts;
+  }
+  var fmt = currentBoardFormat();
+  pick.value = fmt;
+
+  var report = (DRAFT.consensus_report || {})[fmt] || {};
+  document.getElementById('boardSpan').textContent =
+    (report.drafts ? report.drafts.toLocaleString() + ' real drafts' : 'real drafts')
+    + (report.snapshot ? ' to ' + report.snapshot : '');
+
+  var data = boardRows(fmt);
+  var drafted = [], r;
+  for (r = 0; r < data.rows.length; r++) if (data.rows[r].adp) drafted.push(data.rows[r]);
+  drafted.sort(function (a, b) { return a.adp - b.adp; });
+
+  var rounds = +document.getElementById('boardrounds').value || 10;
+  var limit = rounds * BOARD_TEAMS;
+  var tierOf = {}, pos;
+  for (pos in TIER_DEPTH) {
+    if (!Object.prototype.hasOwnProperty.call(TIER_DEPTH, pos)) continue;
+    var built = tiersFor(data.rows, pos);
+    if (!built) continue;
+    for (var t = 0; t < built.tiers.length; t++) {
+      for (var m = 0; m < built.tiers[t].length; m++) {
+        tierOf[built.tiers[t][m].p.gsis_id] = t + 1;
+      }
+    }
+  }
+
+  var html = '<table><thead><tr><th>Pick</th><th class="l">Player</th><th>ADP</th>'
+    + '<th>Spread</th><th>We project</th><th>Per game</th><th>Games</th>'
+    + '<th>Over replacement</th><th>Tier</th></tr></thead><tbody>';
+  for (r = 0; r < drafted.length && r < limit; r++) {
+    var row = drafted[r];
+    var round = Math.floor(r / BOARD_TEAMS) + 1, slot = (r % BOARD_TEAMS) + 1;
+    var newRound = slot === 1;
+    html += '<tr' + (newRound && r ? '' : ' class="nb"') + '>'
+      + '<td><b>' + round + '.' + (slot < 10 ? '0' : '') + slot + '</b></td>'
+      + '<td class="l"' + teamStyle(row.p.team) + '>' + chip(row.p.position)
+      + esc(row.p.name) + ' ' + teamBadge(row.p.team) + '</td>'
+      + '<td>' + row.adp.toFixed(1) + '</td>'
+      + '<td><span class="subtext">±' + (row.sd || 0).toFixed(1) + '</span></td>'
+      + '<td>' + row.season.toFixed(0) + '</td>'
+      + '<td>' + row.perGame.toFixed(1) + '</td>'
+      + '<td><span class="subtext">' + row.games.toFixed(1) + '</span></td>'
+      + '<td><b>' + row.vor.toFixed(0) + '</b></td>'
+      + '<td>' + (tierOf[row.p.gsis_id]
+          ? '<span class="tag">' + row.p.position + tierOf[row.p.gsis_id] + '</span>'
+          : '<span class="subtext">—</span>') + '</td></tr>';
   }
   host.innerHTML = html + '</tbody></table>';
 
-  note.innerHTML = '<b>What "still there" means.</b> The consensus board publishes an '
-    + 'average draft position <i>and the spread around it</i>, measured across <b>'
-    + report.drafts.toLocaleString() + '</b> real drafts taken in the week to <b>'
-    + esc(String(report.snapshot)) + '</b>. So this is not a feel about who lasts: it is '
-    + 'that player’s own distribution, asked whether it clears your pick number. '
-    + 'Jahmyr Gibbs goes 1.5 with a spread of 0.7 and is gone by pick 4; a sixth-round '
-    + 'receiver swings seven or eight picks either way, which is why the list gets '
-    + 'longer and less certain as it goes down.'
-    + '<br><br><b>Three names, not one, and the order is ours not the board’s.</b> '
-    + 'They are ranked by points over replacement at this league size — what the pick '
-    + 'is worth against the man you could have anyway — so a name further down the '
-    + 'consensus board can lead the row. Anything under a '
-    + Math.round(PLAN_MIN_CHANCE * 100) + '% chance of lasting is not shown, because a '
-    + 'plan built on the pick before yours going wrong is not a plan.'
-    + '<br><br><b>Each round assumes you took the first name in the round above</b> — '
-    + 'otherwise every row lists the same three men, and the point of the table is that '
-    + 'round four depends on rounds one to three. The board thins by itself as the pick '
-    + 'numbers rise. Where a row says <span class="slot">must fill</span>, the rounds '
-    + 'left have run down to the starters you still need and only those are offered.'
-    + '<br><br><b>Only one quarterback and one tight end appear in these ten rounds, '
-    + 'and the backtest says that costs you a little.</b> The reasoning for the cap is '
-    + 'that over-replacement value is measured against the man who would otherwise '
-    + 'START, so it is true of the first one you take and false of the second — without '
-    + 'it the list spent four premium picks on two startable players. That argument is '
-    + 'sound and it was still only an argument, so the rule was put through the same '
-    + 'fourteen-season test as everything below: it comes out <b>+0.07 of a finishing '
-    + 'place worse</b> than auto-drafting, better in only 4 of 14 seasons, and it is the '
-    + '<b>only</b> row in that table which separates from the line at all — against '
-    + 'itself. It is kept anyway, for a reason the test cannot see: those rosters are '
-    + 'graded <b>best-ball</b> with no waiver wire, which is the friendliest possible '
-    + 'world for a backup. Best-ball starts whichever of your two tight ends scored more '
-    + 'that week, bye included, for free. A real league makes you choose on Sunday '
-    + 'morning and lets you stream the bye off waivers instead. So 0.07 of one place out '
-    + 'of twelve is an upper bound on what the cap costs, and you are seeing the number '
-    + 'rather than the argument.'
-    + '<br><br><b>Where this disagrees with the backtest below, read both.</b> If a '
-    + 'tight end leads one of your early rounds it is because this year’s top one is '
-    + 'genuinely scarce at the position, and the table further down says a forced '
-    + '<i>TE round 1</i> finished 6.76 against a 6.50 line. Those are not in conflict: '
-    + 'that rule spends a first-round pick on a tight end <b>every</b> season, including '
-    + 'the ones with no elite tight end in them, and the rosters that actually opened '
-    + 'at the position posted 5.94. The rule is bad; the player may not be.'
-    + '<br><br><b>Over-replacement goes negative in the later rounds, and that is the '
-    + 'information.</b> By round eight in a twelve-team league everyone left is behind '
-    + 'the man you could claim off waivers in October — which is what makes those picks '
-    + 'bench and upside rather than lineup, whatever the projection beside them says.'
-    + '<br><br><b>The ESPN column is ESPN’s number in ESPN’s scoring</b>, '
-    + 'carried across untouched so it matches what their site shows you — not rescored '
-    + 'under your settings, which would make it a third opinion of ours rather than a '
-    + 'second opinion of theirs. Ours is lower on purpose: it multiplies a per-game '
-    + 'rate by the games a player is actually expected to play, where seventeen weekly '
-    + 'projections added up describe a season nobody has. '
-    + esc(DRAFT.caveat || '');
+  var repl = [];
+  for (pos in data.replacement) {
+    if (Object.prototype.hasOwnProperty.call(data.replacement, pos) && BOARD_STARTERS[pos]) {
+      repl.push(pos + ' ' + data.need[pos] + ' (' + data.replacement[pos].toFixed(0) + ')');
+    }
+  }
+  note.innerHTML = '<b>The order is the room’s, the numbers are ours.</b> Picks are laid '
+    + 'out as a ' + BOARD_TEAMS + '-team snake in consensus order, so <b>3.07</b> is the '
+    + 'seventh pick of the third round. <b>ADP</b> and <b>spread</b> come from '
+    + (report.drafts ? '<b>' + report.drafts.toLocaleString() + '</b> real '
+        : 'real ') + FORMAT_LABEL[fmt] + ' drafts taken in the week to <b>'
+    + esc(String(report.snapshot || '')) + '</b> — the spread is how far his actual draft '
+    + 'slot moves, so ±1 means he goes where he goes and ±8 means the room disagrees '
+    + 'about him by most of a round.'
+    + '<br><br><b>Changing the scoring changes both sides.</b> It picks a different '
+    + 'board, because receivers and pass-catching backs move up the more a reception is '
+    + 'worth, and it rescores our projections to match — a number with a point per '
+    + 'reception in it cannot be compared against a standard-league board. Your own '
+    + 'touchdown values and bonuses from Settings are kept; only the reception changes.'
+    + '<br><br><b>Over replacement is the column to draft on.</b> Season points say who '
+    + 'scores most; this says what the pick is worth against the man you could have '
+    + 'anyway. Under these starters a ' + BOARD_TEAMS + '-team league runs out at '
+    + esc(repl.join(', ')) + ' — the number in brackets is what that replacement '
+    + 'projects, and everyone is measured against it. That is why a quarterback with the '
+    + 'most raw points on the board can sit behind a back with far fewer.'
+    + '<br><br><b>Season totals are a rate times expected games</b>, not eighteen weekly '
+    + 'projections added up: a starting back plays about fourteen of seventeen, and '
+    + 'pricing him for all of them is how a board ends up loving the fragile.';
+
+  renderTiers(data, fmt, report);
+}
+
+function renderTiers(data, fmt, report) {
+  var host = document.getElementById('tierList');
+  var note = document.getElementById('tierNote');
+  var html = '', order = ['QB', 'RB', 'WR', 'TE'], any = false, lines = [];
+  for (var i = 0; i < order.length; i++) {
+    var built = tiersFor(data.rows, order[i]);
+    if (!built) continue;
+    any = true;
+    html += '<h3 class="sub">' + order[i] + ' <span class="subtext">— ordinary step '
+      + built.typical.toFixed(1) + ' pts, a break needs more than '
+      + built.bar.toFixed(1) + '</span></h3>';
+    for (var t = 0; t < built.tiers.length; t++) {
+      var tier = built.tiers[t];
+      html += '<div class="swrow"><b>' + order[i] + (t + 1) + '</b>';
+      for (var m = 0; m < tier.length; m++) {
+        html += '<span class="tiername"' + teamStyle(tier[m].p.team) + '>'
+          + esc(tier[m].p.name) + ' <span class="subtext">'
+          + tier[m].season.toFixed(0) + '</span></span>';
+      }
+      html += '</div>';
+      /* The size of the break, IN POINTS AND PER WEEK, printed between the tiers it
+         separates. A season gap needs the weekly figure beside it or it cannot be
+         judged: the rule finds a real break between the second and third quarterback
+         worth 10 points, and 10 points across a season is six tenths of a point a week
+         — technically a break, practically nothing. Showing both is what stops the
+         reader treating every line as equally worth reaching for. */
+      if (t < built.tiers.length - 1) {
+        var gap = tier[tier.length - 1].season - built.tiers[t + 1][0].season;
+        var weekly = gap / Math.max(1, DATA.weeks.length);
+        html += '<div class="tiergap' + (weekly < 1 ? ' slight' : '') + '">drops '
+          + gap.toFixed(0) + ' points here — <b>' + weekly.toFixed(1)
+          + '</b> a week' + (weekly < 1 ? ', which is barely a break at all' : '')
+          + '</div>';
+      }
+    }
+    lines.push(order[i] + ' ' + built.tiers.length);
+  }
+  host.innerHTML = any ? html : '<div class="empty">Not enough players to tier.</div>';
+  document.getElementById('tierSpan').textContent = FORMAT_LABEL[fmt] + ' · '
+    + lines.join(' · ') + ' tiers';
+  note.innerHTML = '<b>The breaks are measured, not drawn by eye.</b> Within a position '
+    + 'we take the drop from each player to the next and find the <b>median</b> — what '
+    + 'an ordinary step down this board costs. A tier ends where a step costs more than '
+    + '<b>' + TIER_BREAK.toFixed(0) + '×</b> that. Both numbers are printed above each '
+    + 'position, so you can see the threshold rather than take it on trust. The multiple '
+    + 'was picked by sweeping it: at 2× a running back list breaks into fourteen tiers, '
+    + 'which is a ranked list wearing a hat, and at 4× quarterback collapses into two '
+    + 'and hides the only break there that matters. Three is the one that leaves every '
+    + 'position with tiers of four to six.'
+    + '<br><br><b>What a tier is for.</b> Inside one, the players are close enough that '
+    + 'taking the last of them costs you almost nothing — so if a tier has four men left '
+    + 'and your pick is two away, you can wait. The line between tiers is where waiting '
+    + 'stops being free, and the points it costs are printed on it.'
+    + '<br><br>This follows the <b>' + FORMAT_LABEL[fmt] + '</b> selector on the board '
+    + 'above: the tiers are cut from projections scored that way, so the shape genuinely '
+    + 'changes between formats rather than the labels changing over a fixed order.';
 }
 
 /* ------------------------------------------------------------------ *
@@ -6996,8 +7132,18 @@ function renderPickPlan(slot, teams, size) {
    priced rather than just listed. Median VOR by round, over everyone the consensus
    board carries — the same idea as roi.py's cost curve, done live because VOR depends
    on the league size on screen. */
+/* The board the recap prices against. Nested by format now, so it must say which one
+   rather than reaching for a bare object that no longer exists — this league's own
+   scoring is the honest pick, falling back to whatever the build carries. */
+function recapBoard() {
+  var boards = (DRAFT && DRAFT.consensus) || {};
+  if (boards[state.format]) return boards[state.format];
+  var have = boardFormats();
+  return have.length ? boards[have[0]] : {};
+}
+
 function adpValueCurve(teams) {
-  var byRound = {}, id, consensus = DRAFT.consensus || {};
+  var byRound = {}, id, consensus = recapBoard();
   for (id in consensus) {
     if (!Object.prototype.hasOwnProperty.call(consensus, id)) continue;
     var vor = (DRAFT.vor[id] || {})[teams];
@@ -7055,7 +7201,7 @@ function draftRecap(teams) {
     + '|' + teams + '|' + state.roster.join(',');
   if (recapMemo.key === key) return recapMemo.value;
 
-  var weeks = remainingWeeks(), curve = adpValueCurve(teams), consensus = DRAFT.consensus || {};
+  var weeks = remainingWeeks(), curve = adpValueCurve(teams), consensus = recapBoard();
   var mine = myTeamIndex(), rows = [], t, i;
   for (t = 0; t < LEAGUE.teams.length; t++) {
     var ids = (t === mine) ? state.roster : (LEAGUE.teams[t].players || []);
@@ -7189,14 +7335,6 @@ function pickCell(item) {
   return chip(item.p.position) + esc(item.p.name)
     + '<br><span class="subtext">round ' + item.round + ' · '
     + (item.surplus >= 0 ? '+' : '') + item.surplus.toFixed(0) + ' on the price</span>';
-}
-
-/* A probability that reads as a probability. Bare percentages in a column of points
-   totals get read as points. */
-function chanceCell(chance) {
-  var pct = Math.round(chance * 100);
-  var cls = pct >= 75 ? 'good' : (pct >= 45 ? 'warn' : 'bad');
-  return '<span class="tag ' + cls + '">' + pct + '%</span>';
 }
 
 function renderDraftPlan(slot, teams, plan, size) {
@@ -7749,7 +7887,6 @@ function renderDraft() {
   if (!plan) return;
 
   renderDraftPlan(slot, teams, plan, size);
-  renderPickPlan(slot, teams, size);
   /* Only while the tab is open, like the report card above it and for the same reason:
      it optimises every roster in the league across every remaining week, twice. */
   if (currentView === 'draft') renderDraftRecap(teams);
@@ -7922,6 +8059,7 @@ function render() {
   renderUnprojectable();
   renderStartSit();
   renderRankings();
+  renderDraftBoard();
   renderLines();
   renderCatchingBacks();
   renderWaivers();
@@ -8093,6 +8231,8 @@ var ON_CHANGE = {
   week:      function (v) { state.week = v; render(); },
   format:    function (v) { state.format = v; applyPreset(v); render(); },
   rankpos:   renderRankings,
+  boardfmt:  renderDraftBoard,
+  boardrounds: renderDraftBoard,
   wpos:      renderWaivers,
   whorizon:  renderWaivers,
   wsort:     renderWaivers,
