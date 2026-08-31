@@ -160,6 +160,16 @@
     box-shadow: 0 8px 22px rgba(0,0,0,.22);
   }
   header .meta { color: var(--header-dim); }
+  /* The league switcher sits on the dark header, so it cannot inherit the page's
+     control colours. Its own dark surface, and a light border so it reads as something
+     you can press rather than as a label. */
+  .leagueswitch {
+    margin: 0 0 14px; padding: 5px 9px; border-radius: 7px; font: inherit;
+    font-size: 12px; font-weight: 650; max-width: 260px;
+    color: var(--header-ink); background: rgba(255,255,255,.13);
+    border: 1px solid rgba(255,255,255,.34);
+  }
+  .leagueswitch option { color: #14181c; background: #fff; }
   h1 {
     font-size: 20px; margin: 0 0 14px; font-weight: 850; letter-spacing: -.5px;
     display: flex; align-items: center; gap: 9px;
@@ -532,6 +542,10 @@
     display: inline-block; min-width: 62px; color: var(--muted); font-size: 10px;
     font-weight: 700; letter-spacing: .8px; text-transform: uppercase;
   }
+  /* Secondary text inside a table cell — the platform and id under a league's name.
+     Its own class rather than `.sub`, which is only ever an h3 and would have given
+     this nothing at all. */
+  .subtext { font-size: 11px; color: var(--dim); }
   /* A sub-heading inside a card, for a section that is part of the same argument as
      the table above it rather than a new one deserving its own card. */
   h3.sub {
@@ -738,6 +752,12 @@
 <header>
   <h1><span class="mark" aria-hidden="true">🏈</span>Fantasy Football</h1>
   <span class="meta" id="meta"></span>
+  <!-- IN THE HEADER, because switching leagues changes what EVERY tab is about. Buried
+       on the Roster tab it would mean four clicks to compare two teams' start/sit on a
+       Sunday morning, which is the thing people with more than one team actually do.
+       Hidden until there are two, so the single-league case gains no clutter. -->
+  <select id="leagueswitch" class="leagueswitch" hidden
+          aria-label="Which of your leagues"></select>
   <div class="tabs" role="tablist">
     <button class="tab" role="tab" data-view="startsit" aria-selected="true">Start / Sit</button>
     <button class="tab" role="tab" data-view="rankings" aria-selected="false">Rankings</button>
@@ -987,7 +1007,7 @@
       <div class="note" id="roiIntro"></div>
       <div class="scroll" id="roiCost"></div>
       <div id="roiDuels"></div>
-      <h3 class="sub">And the answer depends on where you charge the flex</h3>
+      <h3 class="subtext">And the answer depends on where you charge the flex</h3>
       <div id="roiFlex"></div>
       <div class="note" id="roiNote2"></div>
     </div>
@@ -1070,6 +1090,13 @@
   </section>
 
   <section class="view" id="view-roster" hidden>
+    <!-- FIRST on the tab, because a returning manager with several teams came here to
+         switch, not to import again. Hidden entirely until something is saved. -->
+    <div class="card" id="leaguesCard" hidden>
+      <h2>Your leagues</h2>
+      <div id="leaguesList"></div>
+      <div class="note" id="leaguesNote"></div>
+    </div>
     <div class="card">
       <h2>Import your league</h2>
       <div class="row" style="align-items:flex-end">
@@ -1085,7 +1112,11 @@
           <input id="leagueid" placeholder="from your league's URL" style="width:100%">
         </div>
         <div><button class="primary" id="importleague">Import</button></div>
-        <div><button class="link" id="clearleague">Clear</button></div>
+        <!-- "Clear" removes the league you are LOOKING AT, not everything you have
+             ever imported. With one league those are the same thing, which is why the
+             old wording survived; with three they are very different, and the
+             destructive reading is the one that loses work. -->
+        <div><button class="link" id="clearleague">Remove this league</button></div>
       </div>
       <div class="note" id="importhelp"></div>
       <div class="note" id="importstatus"></div>
@@ -1262,28 +1293,122 @@ function defaults() {
     config: { name: 'Full PPR', per_stat: perStat, bonuses: [], dst_points_allowed: DST_TIERS },
     slots: copy(DEFAULT_SLOTS),
     roster: [],
-    // The imported league lives in local state, not in the data file: it is per
-    // person and per league, and two people opening the same page have different
-    // ones. `leagueTeam` is the index of whichever team is yours.
-    league: null,
+    // Imported leagues live in local state, not in the data file: they are per person
+    // and per league, and two people opening the same page have different ones.
+    // `leagueTeam` is the index of whichever team is yours in the ACTIVE league.
     leagueTeam: undefined
   };
 }
 
+/* ONE PERSON, SEVERAL LEAGUES — and every one of them kept.
+   A manager with three teams was being asked to re-import on every switch, because a
+   single `state.league` can only hold the last one and re-importing overwrote it. So
+   the saved shape is a LIST, `state.leagues`, with `state.activeLeague` naming which
+   one the whole page is currently about.
+
+   A record is a league object with three fields added, which is what lets the rest of
+   the file stay unchanged: `LEAGUE` is simply the active record, so every consumer of
+   `LEAGUE.teams` / `.name` / `.platform` reads it exactly as before. The added fields
+   are `team` (your index in it) and `roster` (your players), because THOSE are the
+   things that must be remembered per league — a switcher that changed the team list
+   and left the previous league's roster on screen would be worse than no switcher. */
+function leagueRecord(league, teamIndex, roster, settings) {
+  var rec = {
+    platform: league.platform || 'league',
+    league_id: league.league_id || '',
+    name: league.name || '',
+    teams: league.teams || [],
+    unresolved: league.unresolved || 0,
+    team: teamIndex,
+    roster: (roster || []).slice(),
+    savedAt: Date.now()
+  };
+  /* SCORING AND SLOTS BELONG TO THE LEAGUE, NOT TO THE BROWSER.
+     Somebody with two teams usually has two rule sets — a PPR league and a standard
+     one, a superflex and a single quarterback — and sharing one config across both
+     would silently rewrite every projection on screen the moment they switched. That
+     is the failure this file cares most about: no error, no warning, just wrong
+     numbers under a familiar team name. It costs nothing to keep them per league,
+     because the mechanism already exists for the roster: the record holds them, the
+     active record is copied into `state`, and everything downstream reads `state` as
+     it always has. */
+  if (settings) {
+    rec.config = cloneConfig(settings.config);
+    rec.slots = copy(settings.slots);
+    rec.format = settings.format;
+  }
+  return rec;
+}
+
+/* A config is nested — `per_stat`, `bonuses`, `dst_points_allowed` — so a shallow copy
+   would leave two leagues sharing one `per_stat` object and editing both at once. */
+function cloneConfig(config) {
+  return JSON.parse(JSON.stringify(config));
+}
+
+/* Identity for de-duplication. Re-importing a league you already have is a REFRESH of
+   that one, never a second copy of it — mid-season you re-import precisely to pick up
+   waiver moves, and ending up with two entries called "Andy's League" would make the
+   switcher useless within a month. Falls back to the name for a pasted payload that
+   carries no id. */
+function leagueKey(rec) {
+  return (rec.platform || '') + ':' + (rec.league_id || rec.name || '');
+}
+
+function leagueLabel(rec) {
+  if (rec.name) return rec.name;
+  return (rec.platform || 'league') + (rec.league_id ? ' ' + rec.league_id : '');
+}
+
+function activeLeagueRecord() {
+  if (!state.leagues || state.activeLeague === undefined) return null;
+  return state.leagues[state.activeLeague] || null;
+}
+
 function load() {
+  var parsed = null;
   try {
     var saved = window.localStorage.getItem(STORE);
-    if (saved) {
-      var parsed = JSON.parse(saved);
-      var base = defaults();
-      for (var k in base) if (!(k in parsed)) parsed[k] = base[k];
-      return parsed;
-    }
+    if (saved) parsed = JSON.parse(saved);
   } catch (e) { /* corrupt or unavailable storage: fall through to defaults */ }
-  return defaults();
+  if (!parsed) parsed = defaults();
+  else {
+    var base = defaults();
+    for (var k in base) if (!(k in parsed)) parsed[k] = base[k];
+  }
+  /* MIGRATION, AND IT MUST NOT LOSE AN EXISTING IMPORT. Anyone already using this page
+     has a single `state.league`; it becomes the first entry in the list, carrying the
+     team and roster they had. The test is whether `leagues` was in the SAVED object,
+     not whether it is empty — a user who deliberately removed their last league must
+     not have a build-time baked one resurrected on every reload. */
+  if (!parsed.leagues) {
+    var one = parsed.league || DATA.league || null;
+    /* The settings they already had belong to the league they already had. */
+    parsed.leagues = (one && one.teams && one.teams.length)
+      ? [leagueRecord(one, parsed.leagueTeam, parsed.roster, parsed)] : [];
+    parsed.activeLeague = parsed.leagues.length ? 0 : undefined;
+  }
+  /* The old single-league field is not kept in parallel. Two copies of the same league
+     is exactly the shape that lets them drift, and only one of them can be right. */
+  if ('league' in parsed) delete parsed.league;
+  return parsed;
 }
 
 function save() {
+  /* THE ACTIVE LEAGUE'S ROSTER IS `state.roster`, and it is written back here rather
+     than at each of the places that change it. Adding a player, dropping one, and
+     "Use this team" are three separate call sites today and any future fourth would
+     silently lose its edit on the next switch — the same reasoning that puts the
+     IR/PUP test inside `optimize` instead of at every caller. `render()` ends in
+     `save()`, so every mutation reaches this. */
+  var rec = activeLeagueRecord();
+  if (rec) {
+    rec.roster = state.roster.slice();
+    rec.team = state.leagueTeam;
+    rec.config = cloneConfig(state.config);
+    rec.slots = copy(state.slots);
+    rec.format = state.format;
+  }
   try { window.localStorage.setItem(STORE, JSON.stringify(state)); } catch (e) {}
 }
 
@@ -4733,12 +4858,113 @@ function renderRoster() {
  * Everything is stored per league in localStorage, so different leagues on
  * different machines stay independent.
  * ------------------------------------------------------------------ */
-var LEAGUE = state.league || DATA.league || null;
+var LEAGUE = activeLeagueRecord();
 
 /* The import attempt that was refused, or null. Deliberately NOT persisted: it is a
    fact about what just happened in this session, and a warning about a failed import
    surviving a reload would outlive the thing it describes. */
 var failedImport = null;
+
+/* MAKE ONE OF THE SAVED LEAGUES THE ONE THE PAGE IS ABOUT.
+   Every tab reads `LEAGUE`, `state.leagueTeam` and `state.roster`, so switching is a
+   matter of pointing all three at a different record — and of throwing away the things
+   that were about the OLD one. `tradeState.partner` is an INDEX into the previous
+   league's team list, so carrying it over would silently grade a swap against a
+   stranger; the ticked players are ids from a roster that is no longer yours. */
+function activateLeague(index) {
+  var rec = state.leagues[index];
+  if (!rec) return false;
+  state.activeLeague = index;
+  LEAGUE = rec;
+  state.leagueTeam = rec.team;
+  state.roster = (rec.roster || []).slice();
+  /* Guarded, because a record written before scoring moved into it — or one a future
+     import path forgets to fill — must leave the working config alone rather than
+     replace it with nothing. */
+  if (rec.config) state.config = cloneConfig(rec.config);
+  if (rec.slots) state.slots = copy(rec.slots);
+  if (rec.format) state.format = rec.format;
+  tradeState = { partner: null, out: {}, into: {} };
+  failedImport = null;
+  return true;
+}
+
+/* Take a freshly imported league, keep it, and make it active.
+   Returns the name of the team it carried over, or null if this is a new league and
+   the user still has to say which team is theirs. */
+function adoptLeague(result) {
+  /* A NEW league inherits the settings on screen, which is the only sensible guess
+     and is usually right — most people's leagues score similarly, and the Settings
+     tab is one click away when they do not. */
+  var rec = leagueRecord(result, undefined, [], state), carried = null, at = -1, i;
+  for (i = 0; i < state.leagues.length; i++) {
+    if (leagueKey(state.leagues[i]) === leagueKey(rec)) { at = i; break; }
+  }
+  if (at >= 0) {
+    /* A REFRESH KEEPS YOUR TEAM, AND MATCHES IT BY NAME RATHER THAN BY INDEX.
+       Re-importing mid-season is how you pick up waiver moves, and being sent back to
+       "which team is yours?" every time would make that a chore nobody does. The index
+       is not safe to carry: both providers return teams in an order that is theirs to
+       change, so position 3 in August need not be position 3 in November. The name is
+       the thing a manager would use, so it is the thing this uses. */
+    var was = state.leagues[at], mine = was.teams[was.team];
+    if (mine && mine.name) {
+      for (i = 0; i < rec.teams.length; i++) {
+        if (rec.teams[i].name === mine.name) { rec.team = i; carried = mine.name; break; }
+      }
+    }
+    /* The refreshed roster, not the saved one — picking up the roster is the whole
+       point of re-importing. Only if the team could not be found does the old one
+       survive, so a rename costs you nothing. */
+    rec.roster = rec.team === undefined ? (was.roster || []).slice()
+                                        : rec.teams[rec.team].players.slice();
+    /* A REFRESH KEEPS THAT LEAGUE'S OWN SCORING, not whatever is on screen. You can
+       refresh league A while looking at league B, and taking B's rules would rewrite
+       A's projections without touching anything a user would think to check. */
+    if (was.config) rec.config = cloneConfig(was.config);
+    if (was.slots) rec.slots = copy(was.slots);
+    if (was.format) rec.format = was.format;
+    state.leagues[at] = rec;
+  } else {
+    state.leagues.push(rec);
+    at = state.leagues.length - 1;
+  }
+  activateLeague(at);
+  return carried;
+}
+
+/* Forget one league. The roster is deliberately left alone when nothing takes its
+   place: those are still your players, and emptying the page because an import was
+   tidied away would be a surprise nobody asked for. */
+function removeLeague(index) {
+  if (!state.leagues[index]) return null;
+  var gone = leagueLabel(state.leagues[index]);
+  state.leagues.splice(index, 1);
+  if (!state.leagues.length) {
+    state.activeLeague = undefined;
+    LEAGUE = null;
+    state.leagueTeam = undefined;
+    tradeState = { partner: null, out: {}, into: {} };
+  } else {
+    activateLeague(Math.min(index, state.leagues.length - 1));
+  }
+  failedImport = null;
+  return gone;
+}
+
+/* Remove one league and say what happened to the page as a result, which is the part
+   that is not obvious: with another league saved, the whole page has just changed
+   subject. */
+function dropLeague(index) {
+  var gone = removeLeague(index);
+  if (!gone) return;
+  setStatus('Removed <b>' + esc(gone) + '</b>. '
+    + (LEAGUE
+        ? 'Now showing <b>' + esc(leagueLabel(LEAGUE)) + '</b> instead.'
+        : 'Your roster is untouched — those are still your players. Import again above '
+          + 'to get the rest of the league back.'), '');
+  render();
+}
 
 var HELP = {
   sleeper: 'Sleeper: the long number in your league URL — '
@@ -5009,10 +5235,7 @@ function adoptEspnJson(text) {
     return;
   }
 
-  failedImport = null;
-  LEAGUE = result;
-  state.league = result;
-  state.leagueTeam = undefined;
+  var carried = adoptLeague(result);
   document.getElementById('pastejson').value = '';
   document.getElementById('pasteBox').open = false;
   setPasteStatus('', '');
@@ -5022,7 +5245,10 @@ function adoptEspnJson(text) {
         ? '. <b>' + result.unresolved + ' could not be matched</b> to our data and will '
           + 'wrongly appear as free agents on Waivers.'
         : '.')
-    + ' Pick your team below.',
+    + (carried
+        ? ' Refreshed the copy you already had, and kept <b>' + esc(carried)
+          + '</b> as your team.'
+        : ' Pick your team below.'),
     result.unresolved ? 'warn' : 'good');
   render();
 }
@@ -5055,7 +5281,72 @@ function renderPasteHelp() {
     + 'itself.';
 }
 
+/* The header switcher and the Roster tab's list, which are the same information at two
+   different weights: one is for changing leagues in a hurry, the other is for seeing
+   what you have and throwing one away. */
+function renderLeagueSwitch() {
+  var pick = document.getElementById('leagueswitch');
+  var many = state.leagues.length > 1;
+  pick.hidden = !many;
+  if (!many) { pick.innerHTML = ''; return; }
+  var html = '', i;
+  for (i = 0; i < state.leagues.length; i++) {
+    var rec = state.leagues[i], mine = rec.teams[rec.team];
+    html += '<option value="' + i + '">' + esc(leagueLabel(rec))
+      + (mine ? ' — ' + esc(mine.name) : ' — no team picked') + '</option>';
+  }
+  pick.innerHTML = html;
+  if (state.activeLeague !== undefined) pick.value = String(state.activeLeague);
+}
+
+function renderLeagueList() {
+  var card = document.getElementById('leaguesCard');
+  var host = document.getElementById('leaguesList');
+  var note = document.getElementById('leaguesNote');
+  card.hidden = !state.leagues.length;
+  if (card.hidden) { host.innerHTML = ''; note.innerHTML = ''; return; }
+
+  var html = '<table><thead><tr><th class="l">League</th><th class="l">Your team</th>'
+    + '<th>Teams</th><th></th></tr></thead><tbody>', i;
+  for (i = 0; i < state.leagues.length; i++) {
+    var rec = state.leagues[i], mine = rec.teams[rec.team];
+    var active = i === state.activeLeague;
+    html += '<tr><td class="l"><b>' + esc(leagueLabel(rec)) + '</b>'
+      + (active ? ' <span class="tag good">showing</span>' : '')
+      + '<br><span class="subtext">' + esc(rec.platform)
+      + (rec.league_id ? ' · ' + esc(rec.league_id) : '')
+      + (rec.unresolved ? ' · ' + rec.unresolved + ' unmatched' : '') + '</span></td>'
+      + '<td class="l">' + (mine ? esc(mine.name) + ' <span class="subtext">('
+          + rec.roster.length + ')</span>'
+        : '<span class="subtext">not picked yet</span>') + '</td>'
+      + '<td>' + rec.teams.length + '</td>'
+      + '<td class="l">'
+      /* A separator, because two bare links side by side read as one phrase — "Show
+         this one Remove" was a sentence nobody wrote. */
+      + (active ? '' : '<button class="link" data-useleague="' + i + '">Show this one'
+          + '</button><span class="subtext"> · </span>')
+      + '<button class="link" data-dropleague="' + i + '">Remove</button></td></tr>';
+  }
+  host.innerHTML = html + '</tbody></table>';
+  note.innerHTML = 'Every league you import is kept here, with its own team and its own '
+    + 'roster. Switching changes what every tab on the page is about — Start / Sit, '
+    + 'Waivers, Trades and the report card all follow it. '
+    + (state.leagues.length > 1
+        ? 'There is a switcher in the header too, so you do not have to come back here.'
+        : 'Import a second league above and a switcher appears in the header.')
+    + '<br><br><b>Scoring and lineup slots belong to the league, not to this browser.</b> '
+    + 'Set half-PPR and a superflex on one and it stays there; the other keeps its own '
+    + 'rules, and switching brings them with it. A league you import fresh starts from '
+    + 'whatever is on screen, which is usually close enough to leave alone.'
+    + '<br><br>Re-importing a league you already have <b>refreshes</b> it rather than '
+    + 'adding a copy: it keeps your team by name — so picking up waiver moves does not '
+    + 'mean saying who you are again — and keeps that league’s own scoring even if you '
+    + 'were looking at a different one when you pressed Import.';
+}
+
 function renderLeague() {
+  renderLeagueSwitch();
+  renderLeagueList();
   document.getElementById('importhelp').innerHTML =
     HELP[document.getElementById('platform').value];
   renderPasteHelp();
@@ -5064,7 +5355,7 @@ function renderLeague() {
   pick.hidden = false;
 
   /* A FAILED IMPORT LEAVES THE PREVIOUS LEAGUE ON SCREEN, AND IT LOOKED LIKE SUCCESS.
-     Nothing in the failure path touches `state.league`, which is correct — losing a
+     Nothing in the failure path touches the saved leagues, which is correct — losing a
      working league because a re-import was refused would be worse — but it meant a red
      error sat directly above a populated team picker showing a real team name and team
      count. The obvious reading is that it half worked, and "Use this team" then quietly
@@ -6179,7 +6470,7 @@ function draftReport() {
   }
   var mine = myTeamIndex();
   var key = state.roster.join(',') + '|' + scoringKey() + '|' + mine
-    + '|' + LEAGUE.teams.length;
+    + '|' + LEAGUE.teams.length + '|' + leagueKey(LEAGUE);
   if (reportMemo.key === key) return reportMemo.value;
 
   var weeks = remainingWeeks(), squads = [], t;
@@ -7133,6 +7424,11 @@ function render() {
     + ' players · ' + freshness(DATA.generated_at);
   meta.title = 'Projections blend ' + sourceSummary(DATA.blend_weights)
     + '. Built ' + DATA.generated_at + '.';
+  /* The scoring and slot grids redraw themselves from `state`, but this select does
+     not — and switching leagues changes `state.format` underneath it. Left unsynced it
+     kept saying "Full PPR" over a half-PPR league, which is the one place on the page
+     where a stale label is indistinguishable from the truth. */
+  document.getElementById('format').value = state.format;
   renderUnprojectable();
   renderStartSit();
   renderRankings();
@@ -7226,10 +7522,7 @@ document.addEventListener('click', function (event) {
         setStatus(err, 'bad');
         return;
       }
-      failedImport = null;
-      LEAGUE = result;
-      state.league = result;
-      state.leagueTeam = undefined;
+      var carried = adoptLeague(result);
       /* SAY WHEN PLAYERS WENT MISSING.
          An import that resolves 150 of 160 players looks identical to a clean one,
          and the ten who vanished then show up as free agents on the waiver wire —
@@ -7244,7 +7537,10 @@ document.addEventListener('click', function (event) {
             ? '. <b>' + result.unresolved + ' could not be matched</b> to our data and '
               + 'will wrongly appear as free agents on Waivers.'
             : '.')
-        + ' Pick your team below.',
+        + (carried
+            ? ' Refreshed the copy you already had, and kept <b>' + esc(carried)
+              + '</b> as your team.'
+            : ' Pick your team below.'),
         result.unresolved ? 'warn' : 'good');
       render();
     });
@@ -7253,10 +7549,15 @@ document.addEventListener('click', function (event) {
   } else if (target.id === 'refreshscores') {
     renderScores(true);
   } else if (target.id === 'clearleague') {
-    LEAGUE = null; state.league = null; state.leagueTeam = undefined;
-    failedImport = null;
-    setStatus('League cleared.', '');
-    render();
+    dropLeague(state.activeLeague);
+  } else if (target.dataset.useleague) {
+    if (activateLeague(+target.dataset.useleague)) {
+      setStatus('Now showing <b>' + esc(leagueLabel(LEAGUE)) + '</b>. Every tab follows '
+        + 'this, including your roster.', 'good');
+      render();
+    }
+  } else if (target.dataset.dropleague) {
+    dropLeague(+target.dataset.dropleague);
   } else if (target.id === 'loadteam') {
     if (LEAGUE && LEAGUE.teams) {
       var index = +document.getElementById('leagueteam').value;
@@ -7298,6 +7599,7 @@ document.addEventListener('input', function (event) {
    patches to the chain did not match and nothing complained — a map makes a missing
    wire visible, and the assertion in init() turns it into an error. */
 var ON_CHANGE = {
+  leagueswitch: function (v) { if (activateLeague(+v)) render(); },
   week:      function (v) { state.week = v; render(); },
   format:    function (v) { state.format = v; applyPreset(v); render(); },
   rankpos:   renderRankings,
