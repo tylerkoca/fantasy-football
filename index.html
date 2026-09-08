@@ -259,6 +259,24 @@
   /* The losing side recedes rather than the winner shouting; both stay legible. */
   .game .side.lost { color: var(--dim); }
   .game .side.lost .pts { font-weight: 600; }
+  /* The betting line. The spread sits with the team it belongs to — that is what makes
+     the favourite readable at a glance — and the implied team total beside it, because
+     that is the number the model actually cares about (5.3 points of QB swing between a
+     p10 and a p90). Both are pushed to the right so they form columns down the card,
+     with `pts` keeping its `margin-left:auto` claim on the leftover space. */
+  /* The record takes the slack so everything after it forms right-aligned columns down
+     the card. `.pts` keeps its own `margin-left:auto` for the case with no line at all,
+     where it is the only thing on the right. */
+  .game .side .slot { flex: 1; }
+  .game .gspr { font-size: 12px; font-weight: 700; min-width: 34px; text-align: right; }
+  .game .gspr.fav { color: var(--text); }
+  .game .gspr.dog { color: var(--dim); font-weight: 600; }
+  .game .gimp { font-size: 11px; color: var(--muted); min-width: 30px; text-align: right; }
+  /* The game total rides on the status line, right-aligned away from the kickoff time. */
+  .game .gtot {
+    margin-left: auto; text-transform: none; letter-spacing: 0;
+    color: var(--muted); font-weight: 700;
+  }
   .game .when {
     font-size: 11px; color: var(--dim); text-transform: uppercase;
     letter-spacing: .6px; font-weight: 700; margin-bottom: 5px;
@@ -4321,15 +4339,74 @@ function gameState(ev) {
   return { state: t.state || 'pre', detail: t.shortDetail || '', done: !!t.completed };
 }
 
-function renderScoreboard(payload) {
+/* ESPN'S ABBREVIATIONS ARE NOT OURS, and exactly one of the 32 differs: ESPN says WSH
+   where nflverse — and therefore the team-colour table, the bye table, GAMELINES and
+   every other keyed lookup on this page — says WAS. Washington's badge on this tab has
+   been rendering with no logo and no colour because of it, silently, since `teamBadge`
+   falls back to the bare abbreviation when the lookup misses. Normalising at the point
+   ESPN data enters (rather than inside `teamBadge`) keeps the boundary in one place;
+   this mirrors crosswalk.TEAM_ALIASES, which is the Python side of the same problem. */
+var SCORE_TEAM_ALIAS = { WSH: 'WAS', JAC: 'JAX', LA: 'LAR', OAK: 'LV', SD: 'LAC' };
+function canonTeam(abbr) {
+  return SCORE_TEAM_ALIAS[abbr] || abbr || '';
+}
+
+/* Half-point lines are the norm, so print 44.5 but not 44.0 — a spread reading "-3.0"
+   is how nothing else in football writes it. */
+function oddsNum(value) {
+  var text = value.toFixed(1);
+  return text.slice(-2) === '.0' ? text.slice(0, -2) : text;
+}
+
+/* THE GAME'S BETTING LINE, from whichever source has one.
+ *
+ * ESPN ships the live line inside the scoreboard payload we already fetch — DraftKings,
+ * 16 of 16 games on an upcoming slate, no extra request — and drops it entirely once a
+ * game is final. So finished weeks fall back to GAMELINES, the nflverse closing line the
+ * build already carries for the model. The two are not the same thing and the card says
+ * which: a live line moves, a closing line is history.
+ *
+ * The two sources sign the spread OPPOSITELY and that is the whole trap here. ESPN's
+ * `spread` is home-relative and NEGATIVE when the home team is favoured (SEA -3 at home
+ * is spread -3.0; BAL -3.5 at Indianapolis is spread +3.5). GAMELINES is per team and
+ * POSITIVE when that team is favoured — see environmentLine, which reads `spread > 0` as
+ * "favoured". Everything below is normalised to ESPN's home-relative convention, once.
+ *
+ * Displayed only. Nothing here reaches a projection, a ranking or a lineup, which is the
+ * same rule the rest of the live tab follows. */
+function gameOdds(comp, week, away, home) {
+  var espn = ((comp.odds || [])[0]) || null;
+  if (espn && typeof espn.spread === 'number' && espn.overUnder) {
+    return { spread: espn.spread, total: espn.overUnder, live: true };
+  }
+  // The build's copy is per team, so both halves have to be present: the game total is
+  // the sum of the two implied totals, and one side alone cannot give it.
+  var lines = GAMELINES[week] || {};
+  var a = lines[away], h = lines[home];
+  if (a && h && a[0] && h[0]) {
+    return { spread: -h[1], total: a[0] + h[0], live: false };
+  }
+  return null;
+}
+
+/* One side's share of the line: its own spread, and its implied points.
+   A team favoured by 3 in a 44.5-point game is implied for 23.75. */
+function sideOdds(odds, isHome) {
+  if (!odds) return null;
+  var sign = isHome ? 1 : -1;
+  var spread = odds.spread * sign;
+  return { spread: spread, implied: odds.total / 2 - spread / 2 };
+}
+
+function renderScoreboard(payload, week) {
   var host = document.getElementById('scoreboard');
   var events = (payload && payload.events) || [];
   if (!events.length) {
     host.innerHTML = '<div class="empty">No games scheduled for this week yet. '
       + 'The NFL regular season has not started.</div>';
-    return 0;
+    return { live: 0, priced: 0 };
   }
-  var liveCount = 0;
+  var liveCount = 0, priced = 0;
   var html = '<div class="games">';
   for (var i = 0; i < events.length; i++) {
     var ev = events[i], comp = (ev.competitions || [])[0] || {};
@@ -4341,30 +4418,50 @@ function renderScoreboard(payload) {
       if (teams[t].homeAway === 'home') home = teams[t]; else away = teams[t];
     }
     if (!home || !away) continue;
+    var homeAbbr = canonTeam((home.team || {}).abbreviation);
+    var awayAbbr = canonTeam((away.team || {}).abbreviation);
     var hs = +(home.score || 0), as = +(away.score || 0);
     var bc = ((comp.broadcasts || [])[0] || {}).names || [];
+    var odds = gameOdds(comp, week, awayAbbr, homeAbbr);
+    if (odds) priced++;
 
-    var when = st.state === 'in' ? '<div class="when live">Live · ' + esc(st.detail) + '</div>'
-      : st.state === 'post' ? '<div class="when">' + esc(st.detail) + '</div>'
+    // The total belongs to the game rather than to either team, so it rides on the
+    // status line. A closing line is labelled as one: a finished game's number is
+    // history, and printing it identically to a live one would say otherwise.
+    var total = odds ? '<span class="gtot">O/U ' + oddsNum(odds.total)
+      + (odds.live ? '' : ' close') + '</span>' : '';
+    var when = st.state === 'in' ? '<div class="when live">Live · ' + esc(st.detail) + total + '</div>'
+      : st.state === 'post' ? '<div class="when">' + esc(st.detail) + total + '</div>'
       : '<div class="when">' + esc(st.detail || 'Scheduled')
-        + (bc.length ? ' · ' + esc(bc.join('/')) : '') + '</div>';
+        + (bc.length ? ' · ' + esc(bc.join('/')) : '') + total + '</div>';
 
     html += '<div class="game">' + when
-      + side(away, as, st, hs) + side(home, hs, st, as) + '</div>';
+      + side(away, awayAbbr, as, st, hs, sideOdds(odds, false))
+      + side(home, homeAbbr, hs, st, as, sideOdds(odds, true)) + '</div>';
   }
   host.innerHTML = html + '</div>';
-  return liveCount;
+  return { live: liveCount, priced: priced, games: events.length };
 }
 
-function side(team, points, st, other) {
-  var abbr = ((team.team || {}).abbreviation) || '';
+function side(team, abbr, points, st, other, odds) {
   var rec = ((team.records || [])[0] || {}).summary || '';
   // Only dim a loser once the game is actually over; dimming a team that is behind at
   // half-time would be an opinion, not a result.
   var lost = st.done && points < other;
+  var line = '';
+  if (odds) {
+    // A pick-em has no favourite, so it gets neither weight: writing "-0" on one side
+    // would name a favourite the market did not.
+    var cls = odds.spread < 0 ? ' fav' : odds.spread > 0 ? ' dog' : '';
+    var text = odds.spread > 0 ? '+' + oddsNum(odds.spread)
+      : odds.spread < 0 ? oddsNum(odds.spread) : 'PK';
+    line = '<span class="gspr' + cls + '">' + text + '</span>'
+      + '<span class="gimp">' + odds.implied.toFixed(1) + '</span>';
+  }
   return '<div class="side' + (lost ? ' lost' : '') + '"' + teamStyle(abbr) + '>'
     + teamBadge(abbr)
     + '<span class="slot">' + esc(rec) + '</span>'
+    + line
     + '<span class="pts">' + (st.state === 'pre' ? '—' : points) + '</span></div>';
 }
 
@@ -4389,12 +4486,19 @@ function renderScores(force) {
   status.textContent = 'Loading…';
   var url = ESPN_SCOREBOARD + '?seasontype=2&week=' + encodeURIComponent(picker.value)
     + '&dates=' + encodeURIComponent(DATA.season);
+  var week = picker.value;
   fetchJson(url).then(function (payload) {
-    var liveCount = renderScoreboard(payload);
-    status.textContent = liveCount
-      ? liveCount + (liveCount === 1 ? ' game' : ' games') + ' in progress'
+    var counts = renderScoreboard(payload, week);
+    status.textContent = counts.live
+      ? counts.live + (counts.live === 1 ? ' game' : ' games') + ' in progress'
       : 'Updated ' + new Date().toLocaleTimeString();
-    scheduleScoreRefresh(liveCount > 0);
+    // A whole slate with no spread column looks like a bug. Books post lines three or
+    // four weeks out, so a week further off than that genuinely has none, and saying so
+    // is the difference between "not priced yet" and "something broke".
+    if (counts.games && !counts.priced) {
+      status.textContent += ' · no lines posted for this week yet';
+    }
+    scheduleScoreRefresh(counts.live > 0);
   }).catch(function (err) {
     host.innerHTML = '<div class="empty">Could not reach the scoreboard ('
       + esc(String(err.message || err)) + '). Scores are fetched live, so this needs a '
@@ -4406,7 +4510,15 @@ function renderScores(force) {
     'Scores come straight from ESPN when you open this tab, not from the nightly build, '
     + 'so they are current to the minute. While a game is in progress the page refreshes '
     + 'itself every 45 seconds; otherwise it leaves the network alone. Nothing here '
-    + 'feeds a projection or a ranking.';
+    + 'feeds a projection or a ranking.'
+    + '<br><br>Beside each team: the <b>spread</b> — the favourite carries the minus sign '
+    + '— and that team’s <b>implied total</b>, its own expected points, which is half '
+    + 'the game total shifted by half the spread. The implied total is the one worth '
+    + 'reading: it is the largest context signal in the model, worth 5.3 points of swing '
+    + 'to a quarterback between a quiet game and a shootout, though close to nothing to '
+    + 'anyone else. Lines are DraftKings’, live from the same ESPN payload as the '
+    + 'scores; ESPN drops them once a game is final, so a finished game shows the '
+    + 'closing line from the build instead, marked <b>close</b>.';
 }
 
 var scoreTimer = null;
