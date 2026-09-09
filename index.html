@@ -277,6 +277,9 @@
     margin-left: auto; text-transform: none; letter-spacing: 0;
     color: var(--muted); font-weight: 700;
   }
+  /* The qualifier under a headline number, where the number beside it is measured a
+     different way and saying so is the difference between a card and a puzzle. */
+  .fine { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); }
   .game .when {
     font-size: 11px; color: var(--dim); text-transform: uppercase;
     letter-spacing: .6px; font-weight: 700; margin-bottom: 5px;
@@ -6530,6 +6533,57 @@ function pct(value) { return (value * 100).toFixed(1) + '%'; }
  * ------------------------------------------------------------------ */
 var GRADES = (DRAFT_HIST && DRAFT_HIST.grades) || null;
 
+/* HOW MUCH EACH POSITION COUNTS TOWARD THE OVERALL LETTER.
+   Read from the fixture for the same reason the letters are: history.py fitted its
+   calibration under this exact weighting, so a copy kept here could grade on one
+   weighting while quoting a table built on another. Falling back to flat weights is the
+   honest default if an older fixture has no table — it is what the card did before. */
+function gradeWeights() {
+  return (GRADES && GRADES.grade_weights) || null;
+}
+
+/* The weighting, in words, DERIVED from the fixture rather than written out here.
+   The draft tab has already been bitten by a hardcoded sentence that survived a data
+   change it should not have survived, so the numbers a reader sees come off the same
+   table the grade used. Positions sharing a weight are named together, heaviest first. */
+function weightSentence() {
+  var weights = gradeWeights();
+  if (!weights) return '';
+  var order = ['QB', 'RB', 'WR', 'TE', 'K', 'DST'], groups = [], seen = {}, i, j;
+  for (i = 0; i < order.length; i++) {
+    var w = weights[order[i]];
+    if (typeof w !== 'number' || seen[w]) continue;
+    seen[w] = true;
+    var names = [];
+    for (j = 0; j < order.length; j++) {
+      if (weights[order[j]] === w) names.push(order[j]);
+    }
+    groups.push({ weight: w, names: names });
+  }
+  groups.sort(function (a, b) { return b.weight - a.weight; });
+  var parts = [];
+  for (i = 0; i < groups.length; i++) {
+    var list = groups[i].names, label = list.length > 1
+      ? list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1] : list[0];
+    parts.push(label + ' ' + (groups[i].weight === 1
+      ? 'count full' : 'at ' + Math.round(groups[i].weight * 100) + '%'));
+  }
+  return parts.join(', ') + '.';
+}
+
+/* The weighted lineup value a grade ranks on. Built from the per-slot split rather than
+   from squadBySlot's own `total`, because that total is also the Trades tab's currency
+   and a trade must keep being graded in real points. */
+function weightedTotal(bySlot) {
+  var weights = gradeWeights(), slot, total = 0;
+  for (slot in bySlot) {
+    if (!Object.prototype.hasOwnProperty.call(bySlot, slot)) continue;
+    var w = weights ? weights[slot] : 1;
+    total += bySlot[slot] * (typeof w === 'number' ? w : 1);
+  }
+  return total;
+}
+
 /* The scale lives in the fixture, so the letters on the card and the letters the study
    calibrated cannot drift apart. Exact at twelve teams — twelve letters, twelve seats —
    and interpolated by share of field at any other size, which is what makes an
@@ -6641,8 +6695,17 @@ function draftReport() {
   var own = reportSquad(state.roster, 'Your team', true, weeks);
   squads.push(own);
 
-  var totals = [], i;
-  for (i = 0; i < squads.length; i++) totals.push(squads[i].total);
+  /* THE LETTER RANKS ON THE WEIGHTED TOTAL, the plain total is still what gets shown.
+     A grade is meant to answer "is this roster good", and an unweighted lineup sum lets
+     a weak tight end or a bad defence read the same as a hole at running back. The
+     weighting is the fixture's, so the card and history.py's calibration agree.
+     `own.total` stays in real points for display — nobody wants a scoreboard in
+     weighted units. */
+  var totals = [], weighted = [], i;
+  for (i = 0; i < squads.length; i++) {
+    totals.push(squads[i].total);
+    weighted.push(weightedTotal(squads[i].bySlot));
+  }
   var teams = squads.length;
 
   /* One row per slot GROUP — the two running-back slots report together, because the
@@ -6669,14 +6732,25 @@ function draftReport() {
               letter: gradeLetter(benchRank, teams), median: median(benches),
               best: Math.max.apply(null, benches), depth: true });
 
-  var rank = rankAmong(totals, own.total);
-  var best = null;
+  var mineWeighted = weightedTotal(own.bySlot);
+  var rank = rankAmong(weighted, mineWeighted);
+  /* THE TOP TEAM MUST BE THE TOP TEAM ON THE SAME MEASURE THE RANK USED. Picking it by
+     raw points while ranking on the weighted value lets the card say "1 of 12" and then
+     name somebody else as the best roster, or quote a "behind" gap that is negative
+     because you outscore the team graded above you. That disagreement is not hypothetical
+     here — outscoring the top-graded roster on raw points while sitting below it on the
+     weighting is exactly what the weighting was asked to do. */
+  var best = null, bestValue = null;
   for (t = 0; t < squads.length; t++) {
-    if (!best || squads[t].total > best.total) best = squads[t];
+    if (best === null || weighted[t] > bestValue) {
+      best = squads[t];
+      bestValue = weighted[t];
+    }
   }
   reportMemo = { key: key, value: {
     teams: teams, weeks: weeks.length, rank: rank, letter: gradeLetter(rank, teams),
     total: own.total, median: median(totals), best: best,
+    weighted: !!gradeWeights(),
     unnamed: mine < 0, rows: rows
   } };
   return reportMemo.value;
@@ -6785,8 +6859,22 @@ function renderReportCard() {
     + ', ' + (Math.abs(gap) < 1 ? 'level with' : '<b>' + Math.abs(gap).toFixed(0)
         + '</b> ' + (gap > 0 ? 'ahead of' : 'behind')) + ' the league median'
     + (report.rank === 1 ? ' — the best roster in the league on these projections.'
-        : ', and ' + (report.best.total - report.total).toFixed(0) + ' behind '
-          + esc(report.best.name) + '.')
+        /* The top-graded team can have FEWER raw points than you, which is the whole
+           point of the weighting and reads as an error if the card just prints a
+           negative gap. Name the reason instead of the number when that happens. */
+        : report.best.total > report.total
+          ? ', and ' + (report.best.total - report.total).toFixed(0) + ' behind '
+            + esc(report.best.name) + '.'
+          : '. ' + esc(report.best.name) + ' grades above you on fewer raw points, '
+            + 'because the weighting counts where those points come from.')
+    /* SAY THAT THE RANK AND THE POINTS ARE NOT THE SAME MEASURE. The total above is
+       real lineup points, because a scoreboard in weighted units is meaningless, but
+       the rank beside it is on the weighted value. Without this line a manager reads a
+       total ahead of the median next to a mid-table rank and concludes the card is
+       broken -- which is what any unexplained disagreement between two numbers on one
+       row looks like. */
+    + (report.weighted ? '<span class="fine">Ranked on a weighted lineup value — '
+        + esc(weightSentence()) + ' The points above are unweighted.</span>' : '')
     + '</div></div>';
 
   /* Strengths and weaknesses in the top and bottom third of the field. A third rather
