@@ -208,6 +208,7 @@
   .tab[data-view="waivers"]  { --tabhue: #4ecf9a; }
   .tab[data-view="season"]   { --tabhue: #f0b84e; }
   .tab[data-view="draft"]    { --tabhue: #f08155; }
+  .tab[data-view="matchup"]  { --tabhue: #e7c64a; }
   .tab[data-view="scores"]   { --tabhue: #c2477e; }
   .tab[data-view="roster"]   { --tabhue: #4fc9d8; }
   .tab[data-view="settings"] { --tabhue: #bcc4ce; }
@@ -242,7 +243,45 @@
   #view-trade    { --section: #c04a8b; }
   #view-draft    { --section: #d95926; }
   #view-scores   { --section: #b83d70; }
+  #view-matchup  { --section: #b38a12; }
   #view-roster   { --section: #2aa8b8; }
+
+  /* Your fantasy matchup. Two scores either side of the one number people came for, so
+     the percentage sits between the teams it is about rather than under one of them. */
+  .mu-head {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: 14px; align-items: center;
+  }
+  .mu-team { min-width: 0; }
+  .mu-team.them { text-align: right; }
+  .mu-name {
+    font-weight: 800; font-size: 15px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .mu-pts { font-size: 34px; font-weight: 850; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .mu-proj { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .mu-odds { text-align: center; }
+  .mu-pct { font-size: 30px; font-weight: 850; font-variant-numeric: tabular-nums; }
+  .mu-label {
+    font-size: 11px; color: var(--dim); text-transform: uppercase;
+    letter-spacing: .6px; font-weight: 700;
+  }
+  /* A proportion, not an encoding: the percentage beside it is always written. */
+  .wpbar {
+    display: flex; height: 10px; border-radius: 5px; overflow: hidden;
+    margin: 12px 0 6px; background: var(--line);
+  }
+  .wpbar > i { display: block; height: 100%; background: var(--section); }
+  .mu-status { font-size: 12px; color: var(--dim); margin-bottom: 12px; }
+  .lineups { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+  .lu td.gs { color: var(--dim); font-size: 12px; white-space: nowrap; }
+  .lu td.gs.live { color: var(--critical); font-weight: 700; }
+  .lu tr.total td { font-weight: 800; border-top: 2px solid var(--line); }
+  .game.mine { border-color: var(--section); box-shadow: 0 0 0 1px var(--section) inset; }
+  .game .mteam {
+    flex: 1; min-width: 0; font-weight: 650;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
 
   /* Scoreboard. One card per game, laid out on a grid so a slate of sixteen reads as
      a slate rather than a list you have to scroll. */
@@ -488,6 +527,13 @@
   .whyweek > div { margin: 2px 0; }
   .whyweek .up, .whyweek .down { font-weight: 700; font-variant-numeric: tabular-nums; }
   td.whycell { min-width: 210px; }
+  /* The scheme line carries no points, so it must not read like the lines above it
+     that do. Set apart by a rule and a lighter weight rather than by another tag —
+     a badge on every row is noise, and the column note explains it once. */
+  .schemeline { font-size: 11px; color: var(--muted); line-height: 1.4;
+                margin-top: 4px; padding-top: 4px;
+                border-top: 1px dotted var(--line-soft); font-style: italic; }
+  .schemeline .up, .schemeline .down { font-style: normal; font-weight: 700; }
   /* Slot-by-slot breakdown under a trade verdict. Wraps rather than scrolls: there are
      at most nine of these and a manager reads them as a set, not a list. */
   .slotmoves { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
@@ -793,7 +839,8 @@
     <button class="tab" role="tab" data-view="season" aria-selected="false">Season Insights</button>
     <button class="tab" role="tab" data-view="trade" aria-selected="false">Trades</button>
     <button class="tab" role="tab" data-view="draft" aria-selected="false">Draft</button>
-    <button class="tab" role="tab" data-view="scores" aria-selected="false">Scores</button>
+    <button class="tab" role="tab" data-view="matchup" aria-selected="false">Fantasy Scores</button>
+    <button class="tab" role="tab" data-view="scores" aria-selected="false">NFL Scores</button>
     <button class="tab" role="tab" data-view="roster" aria-selected="false">Roster</button>
     <button class="tab" role="tab" data-view="settings" aria-selected="false">Settings</button>
   </div>
@@ -834,6 +881,12 @@
         <span class="tag">where your roster thins out</span></h2>
       <div id="byeBoard"></div>
       <div class="note" id="byeNote"></div>
+    </div>
+    <div class="card">
+      <h2>How this week&rsquo;s defences play
+        <span class="tag">charted, not projected</span></h2>
+      <div id="schemeBoard"></div>
+      <div class="note" id="schemeNote"></div>
     </div>
     <div class="card">
       <h2>Why this projection
@@ -1132,6 +1185,51 @@
       </div>
       <div class="scroll" id="draftBoard"></div>
       <div class="note" id="draftCaveat"></div>
+    </div>
+  </section>
+
+  <!-- YOUR FANTASY MATCHUP. The scores are your platform's own — who each manager really
+       started, scored under your league's real rules — and the odds are ours, simulated
+       from the model's measured misses. See renderMatchup. -->
+  <section class="view" id="view-matchup" hidden>
+    <div class="card">
+      <h2>Your matchup <span class="tag" id="matchsource"></span></h2>
+      <div class="row" style="margin-bottom:10px; align-items:flex-end">
+        <div>
+          <label for="matchweek">Week</label>
+          <select id="matchweek"></select>
+        </div>
+        <div><button class="primary" id="refreshmatch">Refresh</button></div>
+        <div class="note" id="matchstatus" style="margin:0"></div>
+      </div>
+      <div id="mymatch"></div>
+      <!-- A PRIVATE ESPN LEAGUE CANNOT BE FETCHED FROM HERE, for the same cookie reason
+           as the roster import, so its matchups arrive the same way: open one link as a
+           first-party tab and paste what it shows. Between pastes, QB/RB/WR/TE are
+           rescored live from Sleeper's stat feed. -->
+      <details id="matchPasteBox" style="margin-top:12px" hidden>
+        <summary>Private ESPN league? Paste this week's matchups</summary>
+        <div class="note" id="matchpastehelp"></div>
+        <textarea id="matchpastejson" rows="4" style="width:100%"
+                  placeholder="Paste the whole JSON page here"></textarea>
+        <div class="row" style="margin-top:8px;align-items:center">
+          <div><button class="primary" id="matchpasteload">Load pasted matchups</button></div>
+          <div><label for="matchpastefile" style="margin:0">…or load the saved file
+            (Ctrl+S on that tab)</label>
+            <input type="file" id="matchpastefile" accept=".json,.txt,application/json"></div>
+          <div class="note" id="matchpastestatus" style="margin:0"></div>
+        </div>
+      </details>
+    </div>
+    <div class="card">
+      <h2>Around your league</h2>
+      <div class="note" style="margin-top:0">Each card: chance to win, projected final,
+        points so far.</div>
+      <div id="leaguematches"></div>
+    </div>
+    <div class="card">
+      <h2>Where the odds come from</h2>
+      <div class="note" id="matchnote" style="margin-top:0"></div>
     </div>
   </section>
 
@@ -2086,6 +2184,170 @@ function contextLines(player, out) {
   }
 }
 
+/* WHAT THE DEFENCE DOES, as opposed to what it has allowed.
+
+   Every other opponent number on this page is an outcome — points conceded, read
+   backwards out of a box score. This one is a METHOD: how often a defence blitzes,
+   plays man, keeps one safety deep, gets pressure. Charted by nflverse, z-scored
+   within its own season, and the only genuinely new fact about an opponent the tool
+   has ever carried.
+
+   IT IS NOT IN THE PROJECTION AND THE PAGE HAS TO SAY SO. `backtest.py --scheme`
+   applied it to 2025 and MAE got WORSE (+0.0027), so it ships displayed, on the
+   trenches.py / departures.py / watch.py precedent. `SCHEME.applied` is emitted as
+   false rather than assumed, so nothing here can quietly start implying otherwise.
+
+   AND THE FOLK VERSION OF IT IS BACKWARDS, WHICH IS THE MOST USEFUL THING HERE. The
+   received wisdom is that a blitz-heavy defence feeds the checkdown, so backs and
+   tight ends gain. Measured, the strongest scheme coefficient anywhere in the study is
+   pass-catching backs LOSING against blitz-heavy defences. Every verdict below is
+   derived from `SCHEME.effects` rather than written into the prose, for the reason the
+   draft tab learned the hard way: a hardcoded sentence survives the data change that
+   should have killed it. */
+var SCHEME = (DATA.facts && DATA.facts.scheme) || null;
+
+/* His share of his team's targets, built the way the measurement built it: projected
+   targets a game over the team's own projected targets a game. That is what decides
+   which half of a position he is in, and the halves genuinely differ — the whole point
+   of a tier is that a pass-catching back and a grinder are not the same player facing
+   the same defence. Memoised, since it is one pass over every player. */
+var SCHEME_TEAM_TARGETS = null;
+
+function schemeTeamTargets() {
+  if (SCHEME_TEAM_TARGETS) return SCHEME_TEAM_TARGETS;
+  var out = {}, i, player, driver;
+  for (i = 0; i < PLAYERS.length; i++) {
+    player = PLAYERS[i];
+    driver = player.drivers && player.drivers.targets_pg;
+    if (!player.team || !driver || driver.p === undefined || driver.p === null) continue;
+    out[player.team] = (out[player.team] || 0) + driver.p;
+  }
+  SCHEME_TEAM_TARGETS = out;
+  return out;
+}
+
+function schemeTargetShare(player) {
+  var driver = player.drivers && player.drivers.targets_pg;
+  if (!driver || driver.p === undefined || driver.p === null) return null;
+  var team = schemeTeamTargets()[player.team];
+  if (!team) return null;
+  return driver.p / team;
+}
+
+/* The effects row that applies to this player: his position, and within it the half he
+   falls in. Quarterbacks have no tier — there is no usage split that means anything for
+   one — so they carry a single row. */
+function schemeEffect(player) {
+  if (!SCHEME || !SCHEME.effects) return null;
+  if (player.position === 'QB') return SCHEME.effects['QB:all'] || null;
+  var share = schemeTargetShare(player);
+  var heavy = SCHEME.effects[player.position + ':heavy'];
+  if (!heavy || share === null) return null;
+  var tier = share >= heavy.cut ? 'heavy' : 'light';
+  return SCHEME.effects[player.position + ':' + tier] || null;
+}
+
+/* The traits this defence is genuinely unusual at, biggest departure first. A defence
+   inside a standard deviation of the league on everything gets nothing said about it,
+   which is correct: "plays an average amount of man" is not information. */
+function schemeTraits(team) {
+  var entry = SCHEME && SCHEME.teams && SCHEME.teams[team];
+  if (!entry || !entry.notable || !entry.notable.length) return [];
+  var out = [], i, name;
+  for (i = 0; i < entry.notable.length; i++) {
+    name = entry.notable[i];
+    out.push({
+      name: name,
+      z: entry.z[name],
+      rate: entry.rates[name],
+      rank: entry.rank[name],
+      league: (SCHEME.league || {})[name],
+      high: entry.z[name] > 0
+    });
+  }
+  return out;
+}
+
+/* One trait as a sentence: the quantity, the number, and where that sits in the league.
+
+   THE VERB ALWAYS NAMES THE QUANTITY THE PERCENTAGE MEASURES. An earlier version
+   carried an inverted label per trait — "plays zone" for a low man rate — and then
+   appended a rank phrase that inverted it again, so Minnesota read "plays zone less
+   than anyone 19%", when 19% is their man rate and they play more zone than anybody.
+   Two inversions do not compose, and the number ends up attached to words describing
+   something else. "Plays man on 19% of dropbacks, least in the league" says the same
+   thing and cannot come out backwards. */
+function schemeTraitText(trait) {
+  var labels = (SCHEME.labels || {})[trait.name] || {};
+  var teams = 0, key, entry = SCHEME.teams;
+  for (key in entry) if (Object.prototype.hasOwnProperty.call(entry, key)) teams++;
+  var text = (labels.verb || trait.name);
+  if (trait.rate !== null && trait.rate !== undefined) {
+    text += ' ' + Math.round(trait.rate * 100) + '%';
+  }
+  var place = trait.high ? trait.rank : (teams + 1 - trait.rank);
+  if (place === 1) text += trait.high ? ', most in the league' : ', least in the league';
+  else text += ', ' + ordinal(place) + (trait.high ? '-most' : '-least');
+  if (trait.league) text += ' (league ' + Math.round(trait.league * 100) + '%)';
+  return text;
+}
+
+/* WHAT IT MEASURED FOR THIS PLAYER, stated as a null when it is one.
+
+   This is the part that has to resist the temptation to say something. Twenty-eight
+   position-by-trait coefficients are fitted and NOT ONE of them clears a
+   multiple-comparison bar; two clear a plain two-sigma one, which is about what pure
+   noise throws up at that count. A page that printed a confident direction for each
+   would be inventing twenty-six findings to dress up two.
+
+   So the estimate is shown WITH its own error bar and then labelled by which bar it
+   clears, if any. That is more useful than a bare verdict — half a point of effect
+   under most of a point of uncertainty is the whole story, and a reader can see it —
+   and more honest than silence, which would hide that the effect was even looked for. */
+function schemeVerdict(player, traits, compact) {
+  var effect = schemeEffect(player);
+  if (!effect || !traits.length) return '';
+
+  /* The BIGGEST estimated effect among this defence's unusual traits, carried with its
+     own error bar. Showing the estimate rather than only the verdict is the point: a
+     reader can see that the number is half a point and the uncertainty is most of a
+     point, which is the whole story and is more honest than either printing a
+     confident direction or printing nothing at all. */
+  var best = null, i, feature, trait, points, error;
+  for (i = 0; i < traits.length; i++) {
+    trait = traits[i];
+    feature = effect.features[trait.name];
+    if (!feature || feature.se === null || feature.se === undefined) continue;
+    points = feature.coef * trait.z;
+    error = Math.abs(feature.se * trait.z);
+    if (!best || Math.abs(points) > Math.abs(best.points)) {
+      best = { points: points, error: error, feature: feature, trait: trait };
+    }
+  }
+  if (!best || Math.abs(best.points) < 0.05) return '';
+
+  /* The rankings cell gets nothing unless the estimate clears at least the uncorrected
+     bar. A hundred rows each carrying "+0.4 ± 0.7, indistinguishable from nothing" is a
+     column of noise with a decimal point on it; the Start / Sit card has the room to
+     show the estimate and the uncertainty together, and that is where it belongs. */
+  if (compact && !best.feature.significant_uncorrected) return '';
+
+  var estimate = '<span class="' + (best.points >= 0 ? 'up' : 'down') + '">'
+    + (best.points >= 0 ? '+' : '') + best.points.toFixed(1) + '</span> &plusmn; '
+    + best.error.toFixed(1) + ' for ' + esc(effect.label);
+
+  /* Twenty-eight coefficients are fitted here, so a plain two-sigma bar would hand back
+     one or two "findings" from noise alone. `significant` is already the corrected
+     flag; `significant_uncorrected` is kept so the cost of correcting is visible rather
+     than assumed, exactly as the draft tab keeps both bars. */
+  if (best.feature.significant) return estimate;
+  if (best.feature.significant_uncorrected) {
+    return estimate + ' <span class="slot">— suggestive, but not past a '
+      + 'multiple-comparison bar</span>';
+  }
+  return estimate + ' <span class="slot">— indistinguishable from nothing</span>';
+}
+
 /* The market's view of the game, which for quarterbacks is the biggest context effect
    in the model — 5.3 points of swing between a p10 and a p90 implied team total, three
    times matchup and three times weather. Lines only exist three or four weeks out, so
@@ -2482,14 +2744,34 @@ function baseShap(player) {
   return SHAP_CACHE[player.gsis_id];
 }
 
+/* THE ONE LINE ON THIS COLUMN THAT CARRIES NO POINTS, and it must not look like it
+   does. Everything above it is a Shapley contribution that adds into the projection;
+   this is what the opponent DOES, which measured too small to project and is shown
+   because it is the only thing here a manager cannot get from the number. It is styled
+   apart and the column note says so once, rather than every row carrying a disclaimer.
+   The trait is the defence's single most extreme one, since a cell listing four is a
+   paragraph nobody reads on a Sunday morning. */
+function schemeWeekLine(entry) {
+  if (!SCHEME || !SCHEME.teams) return '';
+  var opponent = entry.week.opponent;
+  var traits = schemeTraits(opponent);
+  if (!traits.length) return '';
+  var verdict = schemeVerdict(entry.player, [traits[0]], true);
+  return '<div class="schemeline" title="How this defence plays. Charted, not '
+    + 'projected — applying it made the model worse, so it is not in the points '
+    + 'above.">' + esc(opponent) + ' ' + schemeTraitText(traits[0])
+    + (verdict ? ' — ' + verdict : '') + '</div>';
+}
+
 function weekReasonCell(entry) {
   var w = entry.week, p = entry.player;
   if (w.is_bye) return '<span class="tag warn">bye week</span>';
 
+  var scheme = schemeWeekLine(entry);
   var adj = w.adjustments;
-  if (!adj) return '<span class="slot">—</span>';
+  if (!adj) return scheme || '<span class="slot">—</span>';
   var result = baseShap(p);
-  if (!result) return '<span class="slot">—</span>';
+  if (!result) return scheme || '<span class="slot">—</span>';
 
   var base = result.average, k;
   for (k in result.phi) if (result.phi.hasOwnProperty(k)) base += result.phi[k];
@@ -2502,7 +2784,9 @@ function weekReasonCell(entry) {
     }
   }
   rows.sort(function (a, b) { return Math.abs(b.v) - Math.abs(a.v); });
-  if (!rows.length) return '<span class="slot">nothing this week</span>';
+  if (!rows.length) {
+    return scheme || '<span class="slot">nothing this week</span>';
+  }
 
   /* EACH FACTOR GETS THE REASON, NOT JUST THE LABEL. "-0.8 tough matchup" says the
      same thing twice — the sign already told you it was tough — and answers none of
@@ -2523,7 +2807,7 @@ function weekReasonCell(entry) {
   var verdict = total >= 1.0 ? '<span class="tag good">boom setup</span>'
     : total <= -1.0 ? '<span class="tag bad">tough spot</span>'
     : '';
-  return verdict + '<div class="whyweek">' + out.join('') + '</div>';
+  return verdict + '<div class="whyweek">' + out.join('') + '</div>' + scheme;
 }
 
 /* What a typical starting lineup scores this week, computed rather than remembered.
@@ -2755,6 +3039,7 @@ function renderStartSit() {
     // without them left bare labels and an empty dropdown sitting under two explained
     // cards — the one thing on the page that looked broken rather than unfilled.
     renderByes();
+    renderScheme();
     renderWhy();
     return;
   }
@@ -2797,6 +3082,7 @@ function renderStartSit() {
     benchBox.innerHTML = bench + '</tbody></table></div>';
   }
   renderByes();
+  renderScheme();
   renderWhy();
 }
 
@@ -3090,6 +3376,90 @@ var ADJUST_LABELS = {
   matchup: 'this opponent', weather: 'weather', environment: 'the game total',
   team_change: 'changed teams', availability: 'injury report'
 };
+
+/* HOW THIS WEEK'S DEFENCES PLAY.
+
+   One row per starter: who he faces, what that defence actually does, and what that
+   measured for a player of his type. It sits on Start / Sit rather than in the rankings
+   table because it is a lineup-shaped question — you are looking at nine men and asking
+   what each of them is walking into.
+
+   The empty state matters as much as the filled one. A defence within a standard
+   deviation of the league on every trait gets "nothing unusual", which is the honest
+   answer and stops the card inventing a story for two-thirds of the league. */
+function renderScheme() {
+  var host = document.getElementById('schemeBoard');
+  var note = document.getElementById('schemeNote');
+  if (!host) return;
+
+  if (!SCHEME || !SCHEME.teams || !SCHEME.season) {
+    host.innerHTML = '<div class="empty">No defensive charting in this build.</div>';
+    note.innerHTML = '';
+    return;
+  }
+  var entries = rosterEntries();
+  if (!entries.length) {
+    host.innerHTML = '<div class="empty">Add players on the Roster tab to see what '
+      + 'their opponents do.</div>';
+    note.innerHTML = '';
+    return;
+  }
+  var lineup = optimize(entries).lineup;
+  var html = '<div class="scroll"><table><thead><tr><th class="l">Starter</th>'
+    + '<th class="l">Opponent</th><th class="l">What they do</th>'
+    + '<th class="l">What that measured</th></tr></thead><tbody>';
+  var shown = 0;
+  for (var i = 0; i < lineup.length; i++) {
+    var row = lineup[i];
+    if (!row.entry) continue;
+    var player = row.entry.player, week = row.entry.week || {};
+    if (week.is_bye) continue;
+    var opponent = week.opponent;
+    var traits = schemeTraits(opponent);
+    var cells = [];
+    for (var t = 0; t < traits.length && t < 3; t++) {
+      cells.push(schemeTraitText(traits[t]));
+    }
+    var verdict = schemeVerdict(player, traits);
+    html += '<tr><td class="l"><span class="slotname">' + esc(row.slot) + '</span>'
+      + esc(player.name) + '</td>'
+      + '<td class="l">' + (opponent ? teamBadge(opponent) : '<span class="slot">—</span>')
+      + '</td>'
+      + '<td class="l">' + (cells.length
+          ? esc(cells.join('; '))
+          : '<span class="slot">nothing unusual</span>') + '</td>'
+      + '<td class="l">' + (verdict || '<span class="slot">—</span>') + '</td></tr>';
+    shown++;
+  }
+  html += '</tbody></table></div>';
+  host.innerHTML = shown ? html
+    : '<div class="empty">Everybody in your lineup is on a bye.</div>';
+
+  var age = SCHEME.stale_seasons;
+  note.innerHTML = '<b>This is what a defence does, not what it has allowed.</b> '
+    + 'Every other opponent number on this page is an outcome read backwards out of a '
+    + 'box score. These are charted plays: how often they blitz, play man, keep one '
+    + 'safety deep. A defence has to be a standard deviation off the league before it '
+    + 'is mentioned at all.'
+    + '<br><br><b>None of it is in the projection, and that is measured rather than an '
+    + 'oversight.</b> Applying it to 2025 made the model worse — mean error moved '
+    + '+0.003, and quarterbacks +0.039 — so it is shown and not scored. '
+    + '<i>' + esc(SCHEME.gate || '') + '</i>'
+    + '<br><br><b>The received wisdom about blitzing is backwards.</b> The story is '
+    + 'that a blitz forces the ball out early, so backs and tight ends feed on '
+    + 'checkdowns. Measured over seven seasons the opposite holds: the single largest '
+    + 'scheme effect anywhere in this study is pass-catching backs doing '
+    + '<i>worse</i> against blitz-heavy defences. What does hold up is the coverage '
+    + 'half — offences throw a larger share to receivers against man and against the '
+    + 'blitz, and the ball travels further against a single-high safety.'
+    + '<br><br><b>Charting is a season behind.</b> These rates are the '
+    + (SCHEME.season || '?') + ' season'
+    + (age ? ', ' + age + ' year' + (age === 1 ? '' : 's') + ' old — nflverse '
+        + 'publishes participation per season, so a defence with a new coordinator is '
+        + 'described by its old one. Scheme repeats year to year at about r=0.5, which '
+        + 'is why last season is worth printing and not worth trusting blindly.'
+      : ', current.');
+}
 
 function renderWhy() {
   var host = document.getElementById('whyBreakdown');
@@ -4537,8 +4907,11 @@ function scheduleScoreRefresh(anyLive) {
 
 /* ---- live actuals for your own players --------------------------- */
 
-function loadLiveStats(week, done) {
-  if (live.statsWeek === week && live.stats) { done(); return; }
+/* `force` refetches a week already held. Start / Sit is happy with one read, but the
+   Fantasy Scores tab rescores a pasted ESPN league from this feed every minute of a live
+   Sunday, and a cache that never expires would freeze it at the first read. */
+function loadLiveStats(week, done, force) {
+  if (!force && live.statsWeek === week && live.stats) { done(); return; }
   if (live.statsPending) return;
   live.statsPending = true;
   fetchJson(SLEEPER_STATS + DATA.season + '/' + week).then(function (payload) {
@@ -4560,6 +4933,962 @@ function liveFor(player) {
   if (!raw) return null;
   if (!LIVE_SCORABLE[player.position]) return { unsupported: true };
   return { points: score(raw), stats: raw };
+}
+
+/* ------------------------------------------------------------------ *
+ * FANTASY SCORES — your matchup, live, and the chance you win it.
+ *
+ * TWO NUMBERS FROM TWO PLACES, and they are kept apart on purpose.
+ *
+ * The SCORE is your platform's: who each manager actually started, scored under the
+ * league's real rules, straight from Sleeper's `/matchups/{week}` or ESPN's matchup
+ * views. Recomputing it from our own stat feed would be a second opinion on a number
+ * that already has an official answer, and it would disagree with the app your
+ * leaguemates are watching.
+ *
+ * The ODDS are ours. Every starter's week is drawn from the model's own measured misses
+ * — the same quantile grids behind the bust/boom column, plus kicker and defence grids
+ * fitted from the market's misses — and each side's draws are summed. A finished game
+ * counts exactly. A game in progress adds his points so far to a draw of what players
+ * like him went on to score from that point of a game, which winprob.py MEASURED from
+ * play-by-play rather than assumed from the clock. `quantile` below mirrors
+ * winprob.quantile exactly, because the calibration printed under the percentage is a
+ * calibration of that sampler and of no other.
+ *
+ * Displayed only, like everything else on the live tabs: nothing here reaches a
+ * projection, a ranking or a lineup.
+ * ------------------------------------------------------------------ */
+var WINPROB = (DATA.facts && DATA.facts.winprob) || {};
+var MATCH_SIMS = 10000;
+var MATCH_REFRESH_MS = 60000;
+
+/* ESPN's lineup slots. 20 is the bench and 21 injured reserve; everything else starts. */
+var ESPN_SLOT = { 0: 'QB', 1: 'TQB', 2: 'RB', 3: 'RB/WR', 4: 'WR', 5: 'WR/TE', 6: 'TE',
+                  7: 'OP', 16: 'DST', 17: 'K', 23: 'FLEX' };
+var ESPN_BENCH = { 20: 1, 21: 1 };
+/* ESPN returns a lineup in roster order, not slot order, so it is sorted for reading.
+   Sleeper's `starters` are already in the league's own slot order and are left alone. */
+var SLOT_ORDER = { QB: 0, TQB: 0, RB: 1, 'RB/WR': 2, WR: 3, 'WR/TE': 4, TE: 5, FLEX: 6,
+                   OP: 7, SUPERFLEX: 7, K: 8, DST: 9 };
+var SLEEPER_SLOT = { DEF: 'DST', SUPER_FLEX: 'SUPERFLEX', REC_FLEX: 'W/T', WRRB_FLEX: 'W/R' };
+var SLEEPER_IDLE = { BN: 1, IR: 1, TAXI: 1 };
+
+/* `key` names the league and week the held data belongs to. Anything else on screen is
+   about a different league, and must be refetched rather than painted. */
+var matchState = { key: null, data: null, board: null, error: null, timer: null,
+                   weekChecked: false, pickedByUser: false, refused: null };
+
+/* The pregame table is one lookup for every position: the model's own grids for
+   QB/RB/WR/TE, the market's misses for K/DST. Keyed identically, so one reader serves. */
+var PREGAME_GRIDS = (function () {
+  var out = {}, k, own = BANDS.grids || {}, special = WINPROB.special_grids || {};
+  for (k in own) if (Object.prototype.hasOwnProperty.call(own, k)) out[k] = own[k];
+  for (k in special) if (Object.prototype.hasOwnProperty.call(special, k)) out[k] = special[k];
+  return out;
+}());
+
+var SLEEPER_INDEX = null, ESPN_INDEX = null;
+function playerBySleeper(id) {
+  if (!SLEEPER_INDEX) SLEEPER_INDEX = indexBy('sleeper_id');
+  return SLEEPER_INDEX[String(id)] || null;
+}
+function playerByEspn(id) {
+  if (!ESPN_INDEX) ESPN_INDEX = indexBy('espn_id');
+  return ESPN_INDEX[String(id)] || null;
+}
+
+function myTeamId() {
+  if (!LEAGUE || state.leagueTeam === undefined) return null;
+  var team = (LEAGUE.teams || [])[state.leagueTeam];
+  return team ? String(team.team_id) : null;
+}
+
+function leagueTeamName(id) {
+  var teams = (LEAGUE && LEAGUE.teams) || [];
+  for (var i = 0; i < teams.length; i++) {
+    if (String(teams[i].team_id) === String(id)) return teams[i].name;
+  }
+  return 'Team ' + id;
+}
+
+/* ---- the sampler --------------------------------------------------- */
+
+/* Grid at cumulative probability u, linearly between steps. Mirrors winprob.quantile. */
+function gridQuantile(grid, u) {
+  var last = grid.length - 1, x = u * last, i = Math.floor(x);
+  if (i >= last) return grid[last];
+  return grid[i] + (grid[i + 1] - grid[i]) * (x - i);
+}
+
+/* The average of a quantile grid — the expected ratio — for the "projected final"
+   column. Trapezoids between steps, since the sampler interpolates linearly. */
+function gridMean(grid) {
+  var last = grid.length - 1, sum = 0;
+  for (var i = 0; i < last; i++) sum += (grid[i] + grid[i + 1]) / 2;
+  return sum / last;
+}
+
+/* Tier grid, else the position's pooled grid — winprob.grid_for, and gridFor above. */
+function tableGrid(table, position, points) {
+  var tiers = BANDS.tiers || [];
+  for (var i = 0; i < tiers.length; i++) {
+    if (points >= tiers[i][0] && points < tiers[i][1]) {
+      var hit = table[position + '.' + fmtTier(tiers[i])];
+      if (hit) return hit;
+    }
+  }
+  return table[position + '.*'] || null;
+}
+
+/* WHAT IS STILL TO COME for a starter `elapsed` minutes into his game, as a sampler of
+   ratios to his pregame projection. The measured checkpoints are bracketed and the two
+   neighbouring grids blended quantile by quantile — kickoff is the pregame grid (all of
+   it still to come) and the final whistle is nothing at all. Blending quantiles rather
+   than draws keeps the result a genuine distribution between the two it sits between.
+   Returns null when nothing measured covers the position, and the caller says so. */
+/* PACE: points so far against what his projection expected by now — or, for a defence,
+   its banked points, since a points-allowed ladder starts at ten rather than zero. The
+   in-game grids are keyed on it because a back running hot at halftime really does get
+   more of the second half. Mirrors winprob.pace_key; the cut points come from the
+   fixture, and without them there are no pace grids to find, so the position is used. */
+function paceKey(position, projected, banked, elapsed) {
+  var cut = WINPROB.pace;
+  if (!cut) return position;
+  if (position === 'DST') {
+    return 'DST~' + (banked >= cut.dst[1] ? 'hi' : banked >= cut.dst[0] ? 'mid' : 'lo');
+  }
+  var expected = projected * elapsed / 60, pace = expected > 0 ? banked / expected : 1;
+  return position + '~' + (pace < cut.low ? 'lo' : pace > cut.high ? 'hi' : 'mid');
+}
+
+function remainingGrids(position, projected, elapsed, banked) {
+  var ing = WINPROB.ingame || {}, marks = ing.checkpoints || [], grids = ing.grids || {};
+  var loAt = 0, lo = tableGrid(PREGAME_GRIDS, position, projected), hiAt = 60, hi = null;
+  if (!lo) return null;
+  var pace = paceKey(position, projected, banked || 0, elapsed);
+  for (var i = 0; i < marks.length; i++) {
+    var table = grids[String(marks[i])] || {};
+    var grid = tableGrid(table, pace, projected) || tableGrid(table, position, projected);
+    if (!grid) continue;
+    if (marks[i] <= elapsed) { loAt = marks[i]; lo = grid; }
+    else { hiAt = marks[i]; hi = grid; break; }
+  }
+  var a = hiAt > loAt ? Math.max(0, Math.min(1, (elapsed - loAt) / (hiAt - loAt))) : 1;
+  return { lo: lo, hi: hi, a: a };
+}
+
+function remainingDraw(spec, u) {
+  var low = gridQuantile(spec.lo, u);
+  var high = spec.hi ? gridQuantile(spec.hi, u) : 0;
+  return low * (1 - spec.a) + high * spec.a;
+}
+
+function remainingMean(spec) {
+  return gridMean(spec.lo) * (1 - spec.a) + (spec.hi ? gridMean(spec.hi) : 0) * spec.a;
+}
+
+/* A seeded generator, so the same scoreboard always prints the same percentage. An
+   unseeded one made the number flicker by a point on every repaint, which reads as
+   the odds moving when nothing had happened. */
+function seededRandom(seed) {
+  var s = seed >>> 0;
+  return function () {
+    s = (s + 0x6D2B79F5) >>> 0;
+    var t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hashText(text) {
+  var h = 2166136261;
+  for (var i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function sortedQuantile(sorted, q) {
+  var x = q * (sorted.length - 1), i = Math.floor(x);
+  if (i >= sorted.length - 1) return sorted[sorted.length - 1];
+  return sorted[i] + (sorted[i + 1] - sorted[i]) * (x - i);
+}
+
+/* Draw both sides MATCH_SIMS times and count. Ties count half, as the calibration does. */
+function simulateMatch(models, seedText) {
+  var rand = seededRandom(hashText(seedText)), wins = 0, totals = [[], []];
+  for (var k = 0; k < MATCH_SIMS; k++) {
+    var pair = [0, 0];
+    for (var s = 0; s < 2; s++) {
+      var t = models[s].locked, parts = models[s].parts;
+      for (var j = 0; j < parts.length; j++) {
+        t += parts[j].spec ? parts[j].projected * remainingDraw(parts[j].spec, rand())
+                           : parts[j].fixed;
+      }
+      pair[s] = t;
+      totals[s].push(t);
+    }
+    if (pair[0] > pair[1]) wins += 1;
+    else if (pair[0] === pair[1]) wins += 0.5;
+  }
+  var finals = [];
+  for (var side = 0; side < 2; side++) {
+    var sorted = totals[side].sort(function (x, y) { return x - y; }), sum = 0;
+    for (var n = 0; n < sorted.length; n++) sum += sorted[n];
+    finals.push({ mean: sum / sorted.length, p10: sortedQuantile(sorted, 0.1),
+                  p90: sortedQuantile(sorted, 0.9) });
+  }
+  return { p: wins / MATCH_SIMS, finals: finals };
+}
+
+/* ---- the NFL clock ------------------------------------------------- */
+
+/* team -> where his game is. Elapsed is in game minutes; overtime is pinned just short of
+   the end, because there is almost nothing left to score and no checkpoint past 58. */
+function nflClock(payload) {
+  var out = {}, events = (payload && payload.events) || [];
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i], comp = (ev.competitions || [])[0] || {};
+    var status = ev.status || {}, type = status.type || {}, st = type.state || 'pre';
+    var period = +status.period || 0, clock = +status.clock || 0, elapsed;
+    if (st === 'post') elapsed = 60;
+    else if (st === 'pre') elapsed = 0;
+    else if (period >= 5) elapsed = 59;
+    else elapsed = Math.max(0, Math.min(60, ((period - 1) * 900 + (900 - clock)) / 60));
+    var teams = comp.competitors || [];
+    for (var t = 0; t < teams.length; t++) {
+      out[canonTeam((teams[t].team || {}).abbreviation)] =
+        { state: st, elapsed: elapsed, detail: type.shortDetail || '' };
+    }
+  }
+  return out;
+}
+
+/* ---- reading a league's matchups ----------------------------------- *
+ * Both readers produce the same shape, and the stored snapshot of a pasted ESPN league
+ * is that shape too — so it holds player IDS, never player objects, which would drag
+ * every projection for the season into localStorage with them.
+ *
+ *   { source, week, fetchedAt, matchups: [{ id, sides: [side, side?] }] }
+ *   side = { teamId, name, total, carried, laterWeeks, espnWinProb, espnProjected,
+ *            starters: [{ slot, pid, name, position, points, empty }] }
+ */
+
+function sleeperMatchups(meta, rows, week) {
+  var positions = (meta && meta.roster_positions) || [], slots = [], i, j;
+  for (i = 0; i < positions.length; i++) {
+    if (!SLEEPER_IDLE[positions[i]]) slots.push(SLEEPER_SLOT[positions[i]] || positions[i]);
+  }
+  var groups = {}, order = [];
+  for (i = 0; i < (rows || []).length; i++) {
+    var row = rows[i], ids = row.starters || [], pts = row.starters_points || [];
+    var side = { teamId: String(row.roster_id), name: leagueTeamName(row.roster_id),
+                 total: typeof row.custom_points === 'number' ? row.custom_points
+                        : (+row.points || 0),
+                 carried: 0, laterWeeks: [], espnWinProb: null, espnProjected: null,
+                 starters: [] };
+    for (j = 0; j < ids.length; j++) {
+      var sid = String(ids[j]);
+      if (!ids[j] || sid === '0') {
+        side.starters.push({ slot: slots[j] || 'SLOT', pid: null, name: '', position: '',
+                             points: 0, empty: true });
+        continue;
+      }
+      var hit = playerBySleeper(sid);
+      side.starters.push({
+        slot: slots[j] || 'SLOT', pid: hit ? hit.gsis_id : null,
+        name: hit ? hit.name : 'Sleeper player ' + sid,
+        position: hit ? hit.position : '',
+        points: typeof pts[j] === 'number' ? pts[j] : (+(row.players_points || {})[sid] || 0)
+      });
+    }
+    // A null matchup_id is a bye week in the fantasy schedule, not a missing opponent.
+    var key = row.matchup_id === null || row.matchup_id === undefined
+      ? 'bye-' + row.roster_id : 'm' + row.matchup_id;
+    if (!groups[key]) { groups[key] = []; order.push(key); }
+    groups[key].push(side);
+  }
+  var matchups = [];
+  for (i = 0; i < order.length; i++) matchups.push({ id: order[i], sides: groups[order[i]] });
+  return { source: 'sleeper', week: String(week), fetchedAt: Date.now(), matchups: matchups };
+}
+
+function espnMatchups(payload, week, source) {
+  var wk = +week, period = wk, span = [wk], mp, i;
+  /* A matchup can span several scoring weeks — two-week playoff rounds — so the week
+     picked is mapped onto the matchup period that contains it. */
+  var periods = ((payload.settings || {}).scheduleSettings || {}).matchupPeriods || {};
+  for (mp in periods) {
+    if (Object.prototype.hasOwnProperty.call(periods, mp)
+        && (periods[mp] || []).indexOf(wk) >= 0) {
+      period = +mp; span = periods[mp];
+    }
+  }
+  var later = [];
+  for (i = 0; i < span.length; i++) if (span[i] > wk) later.push(String(span[i]));
+  var names = {}, teams = payload.teams || [];
+  for (i = 0; i < teams.length; i++) {
+    names[String(teams[i].id)] = teams[i].name
+      || ((teams[i].location || '') + ' ' + (teams[i].nickname || '')).replace(/^ | $/g, '');
+  }
+  var matchups = [], schedule = payload.schedule || [];
+  for (i = 0; i < schedule.length; i++) {
+    var game = schedule[i];
+    if (game.matchupPeriodId !== period) continue;
+    var sides = [], raw = [game.home, game.away];
+    for (var r = 0; r < raw.length; r++) {
+      if (!raw[r]) continue;
+      var team = raw[r], entries = (team.rosterForCurrentScoringPeriod || {}).entries || [];
+      var starters = [];
+      for (var e = 0; e < entries.length; e++) {
+        if (ESPN_BENCH[entries[e].lineupSlotId]) continue;
+        var ppe = entries[e].playerPoolEntry || {}, pl = ppe.player || {};
+        var hit = playerByEspn(entries[e].playerId);
+        starters.push({ slot: ESPN_SLOT[entries[e].lineupSlotId] || 'SLOT',
+                        pid: hit ? hit.gsis_id : null,
+                        name: hit ? hit.name : (pl.fullName || 'ESPN player ' + entries[e].playerId),
+                        position: hit ? hit.position : '',
+                        points: +ppe.appliedStatTotal || 0, at: e });
+      }
+      starters.sort(function (x, y) {
+        var a = SLOT_ORDER[x.slot], b = SLOT_ORDER[y.slot];
+        a = a === undefined ? 20 : a; b = b === undefined ? 20 : b;
+        return a - b || x.at - y.at;
+      });
+      var total = typeof team.totalPointsLive === 'number' ? team.totalPointsLive
+                  : (+team.totalPoints || 0);
+      var thisWeek = +((team.pointsByScoringPeriod || {})[wk]);
+      var current = 0;
+      for (e = 0; e < starters.length; e++) current += starters[e].points;
+      /* Points from EARLIER weeks of a multi-week matchup are already banked, and the
+         lineup on screen cannot change them. Single-week matchups carry nothing. */
+      var carried = Math.max(0, total - (isNaN(thisWeek) ? current : thisWeek));
+      sides.push({ teamId: String(team.teamId),
+                   name: names[String(team.teamId)] || leagueTeamName(team.teamId),
+                   total: total, carried: carried, laterWeeks: later,
+                   espnWinProb: typeof team.winProbability === 'number' ? team.winProbability : null,
+                   espnProjected: typeof team.totalProjectedPointsLive === 'number'
+                     ? team.totalProjectedPointsLive : null,
+                   starters: starters });
+    }
+    if (sides.length) matchups.push({ id: 'e' + game.id, sides: sides });
+  }
+  return { source: source, week: String(week), fetchedAt: Date.now(), matchups: matchups,
+           scoringPeriod: payload.scoringPeriodId };
+}
+
+function espnMatchupUrl(id, week) {
+  return 'https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/'
+    + DATA.season + '/segments/0/leagues/' + encodeURIComponent(id)
+    + '?view=mMatchupScore&view=mBoxscore&view=mSettings&view=mTeam&scoringPeriodId='
+    + encodeURIComponent(week);
+}
+
+function fetchLeagueMatchups(league, week) {
+  if (league.platform === 'sleeper') {
+    var base = 'https://api.sleeper.app/v1/league/' + encodeURIComponent(league.league_id);
+    return Promise.all([fetchJson(base), fetchJson(base + '/matchups/' + week)])
+      .then(function (all) { return sleeperMatchups(all[0], all[1], week); });
+  }
+  if (league.platform === 'espn') {
+    /* credentials: 'include' for the same reason as importEspn — a public league needs
+       nothing, and a private one works in the rare browser that lets the cookie cross. */
+    return fetch(espnMatchupUrl(league.league_id, week), { credentials: 'include' })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject({ status: r.status }); })
+      .then(function (payload) { return espnMatchups(payload, week, 'espn'); });
+  }
+  return Promise.reject({ unsupported: true });
+}
+
+/* ---- one side, made ready to simulate ------------------------------ */
+
+/* For each starter: the points he has, what he is projected for, where his game is,
+   and a sampler for what is still to come. `rescore` is the private-ESPN case, where
+   the pasted points are refreshed from Sleeper's live stat feed for the four positions
+   that feed can score. */
+function sideModel(side, data, clocks) {
+  var week = data.week, rescore = data.source === 'espn-paste';
+  var rows = [], parts = [], shown = 0, counts = { pre: 0, live: 0, done: 0 };
+  var unknown = 0, rescored = 0, gap = 0, gapN = 0, projFinal = side.carried || 0;
+  for (var i = 0; i < side.starters.length; i++) {
+    var s = side.starters[i], p = s.pid ? BY_ID[s.pid] : null;
+    var row = { slot: s.slot, name: s.name, player: p, points: s.points, empty: !!s.empty,
+                state: 'none', detail: '', projFinal: null, rescored: false };
+    rows.push(row);
+    if (s.empty) { row.detail = 'Empty'; continue; }
+    if (!p) { unknown++; shown += s.points; projFinal += s.points; continue; }
+
+    /* No scoreboard at all means no clock for anyone. The odds are withheld in that case
+       (renderMyMatch says why), but the lineups must still draw, so every game is read
+       as not yet started rather than dereferencing a clock that is not there. */
+    var clock = clocks ? clocks[p.team] : { state: 'pre', elapsed: 0, detail: '' };
+    var w = p.weeks[week];
+    var bye = !w || w.is_bye || !clock;
+    row.state = bye ? 'post' : clock.state;
+    row.detail = bye ? 'Bye' : (clock.state === 'post' ? 'Final' : clock.detail);
+    var elapsed = bye ? 60 : clock.elapsed;
+    if (row.state === 'in') counts.live++;
+    else if (row.state === 'post') counts.done++;
+    else counts.pre++;
+
+    if (rescore && LIVE_SCORABLE[p.position]) {
+      var lv = liveFor(p);
+      if (lv && typeof lv.points === 'number') {
+        if (row.state === 'post' && s.points) { gap += lv.points - s.points; gapN++; }
+        row.points = lv.points;
+        row.rescored = true;
+        rescored++;
+      }
+    }
+    shown += row.points;
+
+    /* A manager who starts a man ruled out gets nothing from him, whatever he was once
+       projected for — the same test the optimiser applies. */
+    var projected = (!bye && !unavailable(p)) ? score(w.stats) : 0;
+    row.projected = projected;
+    var spec = projected > 0 && elapsed < 60
+      ? remainingGrids(p.position, projected, elapsed, row.points) : null;
+    if (spec) {
+      parts.push({ projected: projected, spec: spec });
+      row.projFinal = row.points + projected * remainingMean(spec);
+    } else {
+      /* Nothing measured for this position: carry the time-proportional share as a
+         fixed amount, and count it so the page can say the odds are missing a range. */
+      var rest = projected > 0 ? projected * Math.max(0, 1 - elapsed / 60) : 0;
+      if (rest) { parts.push({ fixed: rest }); unknown++; }
+      row.projFinal = row.points + rest;
+    }
+    projFinal += row.projFinal;
+  }
+
+  /* Later weeks of a multi-week matchup: the same lineup, drawn pregame. */
+  for (var l = 0; l < (side.laterWeeks || []).length; l++) {
+    for (i = 0; i < side.starters.length; i++) {
+      var later = side.starters[i].pid ? BY_ID[side.starters[i].pid] : null;
+      var lw = later && later.weeks[side.laterWeeks[l]];
+      if (!lw || lw.is_bye || unavailable(later)) continue;
+      var lp = score(lw.stats), ls = lp > 0 ? remainingGrids(later.position, lp, 0, 0) : null;
+      if (ls) { parts.push({ projected: lp, spec: ls }); projFinal += lp * remainingMean(ls); }
+    }
+  }
+
+  /* The banked total. Official sources give it directly; a rescored paste has to add
+     it up, because some of its points are fresher than the paste's own total. */
+  var locked = rescore ? (side.carried || 0) + shown : side.total;
+  return { side: side, rows: rows, parts: parts, locked: locked, counts: counts,
+           unknown: unknown, rescored: rescored, gap: gap, gapN: gapN,
+           projFinal: rescore ? projFinal : projFinal - shown - (side.carried || 0) + side.total };
+}
+
+/* ---- rendering ----------------------------------------------------- */
+
+function pts1(value) { return (Math.round(value * 10) / 10).toFixed(1); }
+
+function winPct(p) {
+  /* Never print 100% or 0% for something that has not happened: a thousandth of a
+     chance is still a chance, and "100%" before the final whistle is a false claim. */
+  var v = Math.round(p * 100);
+  if (v >= 100 && p < 1) return '>99%';
+  if (v <= 0 && p > 0) return '<1%';
+  return v + '%';
+}
+
+function lineupTable(model, heading) {
+  var html = '<table class="lu"><thead><tr><th class="l">' + esc(heading) + '</th>'
+    + '<th class="l">Game</th><th>Pts</th><th title="Points so far plus what players '
+    + 'like him are expected to add from here">Proj</th></tr></thead><tbody>';
+  for (var i = 0; i < model.rows.length; i++) {
+    var r = model.rows[i], p = r.player, who;
+    if (r.empty) who = '<i>Empty slot</i>';
+    else if (p) {
+      who = avatar(p) + chip(p.position) + esc(p.name) + ' ' + teamBadge(p.team)
+        + (r.rescored ? ' <span class="tag" title="Rescored from Sleeper’s live stat '
+          + 'feed under your Settings scoring, fresher than the pasted number">live</span>'
+          : '');
+    } else {
+      who = esc(r.name) + ' <span class="tag warn" title="Not in our data, so he counts at '
+        + 'the points he has and nothing more">no projection</span>';
+    }
+    var pre = r.state === 'pre';
+    /* The slot is only news when it is not the man's own position — FLEX, OP, W/T.
+       "QB" beside a QB chip says the same thing twice. */
+    var slotLabel = p && r.slot === p.position ? ''
+      : '<span class="slot">' + esc(r.slot) + '</span> ';
+    html += '<tr><td class="l who"' + (p ? teamStyle(p.team) : '') + '>' + slotLabel + who
+      + '</td>'
+      + '<td class="l gs' + (r.state === 'in' ? ' live' : '') + '">' + esc(r.detail) + '</td>'
+      + '<td>' + (pre && !r.points ? '—' : '<b>' + pts1(r.points) + '</b>') + '</td>'
+      + '<td>' + (r.projFinal === null ? '—' : pts1(r.projFinal)) + '</td></tr>';
+  }
+  html += '<tr class="total"><td class="l">Total'
+    + (model.side.carried ? ' <span class="slot">incl. ' + pts1(model.side.carried)
+      + ' from earlier weeks</span>' : '') + '</td><td></td>'
+    + '<td>' + pts1(model.locked) + '</td><td>' + pts1(model.projFinal) + '</td></tr>';
+  return html + '</tbody></table>';
+}
+
+function countsText(models) {
+  var c = { pre: 0, live: 0, done: 0 };
+  for (var i = 0; i < models.length; i++) {
+    c.pre += models[i].counts.pre; c.live += models[i].counts.live;
+    c.done += models[i].counts.done;
+  }
+  var parts = [];
+  if (c.live) parts.push(c.live + ' playing now');
+  if (c.pre) parts.push(c.pre + ' still to play');
+  if (c.done) parts.push(c.done + ' finished');
+  return { text: parts.join(' · '), live: c.live, pre: c.pre };
+}
+
+function renderMyMatch(entry, clocks) {
+  var host = document.getElementById('mymatch');
+  if (!entry) {
+    host.innerHTML = myTeamId() === null
+      ? '<div class="empty">Pick which team is yours on the Roster tab and your matchup '
+        + 'will lead this page. Every matchup in the league is below.</div>'
+      : '<div class="empty">Your team has no matchup this week — a bye in your league’s '
+        + 'schedule.</div>';
+    return;
+  }
+  var mine = entry.mineAt, them = 1 - mine;
+  var you = entry.models[mine], opp = entry.models[them];
+  var html = '';
+  if (entry.sim) {
+    var p = mine === 0 ? entry.sim.p : 1 - entry.sim.p;
+    var fy = entry.sim.finals[mine], fo = entry.sim.finals[them];
+    html += '<div class="mu-head">'
+      + '<div class="mu-team"><div class="mu-name">' + esc(you.side.name) + '</div>'
+      + '<div class="mu-pts">' + pts1(you.locked) + '</div>'
+      + '<div class="mu-proj">projected ' + pts1(fy.mean) + ' · likely ' + pts1(fy.p10)
+      + '–' + pts1(fy.p90) + '</div></div>'
+      + '<div class="mu-odds"><div class="mu-pct">' + winPct(p) + '</div>'
+      + '<div class="mu-label">chance you win</div></div>'
+      + '<div class="mu-team them"><div class="mu-name">' + esc(opp.side.name) + '</div>'
+      + '<div class="mu-pts">' + pts1(opp.locked) + '</div>'
+      + '<div class="mu-proj">projected ' + pts1(fo.mean) + ' · likely ' + pts1(fo.p10)
+      + '–' + pts1(fo.p90) + '</div></div></div>'
+      + '<div class="wpbar" role="img" aria-label="' + winPct(p) + ' chance you win">'
+      + '<i style="width:' + Math.round(p * 100) + '%"></i></div>';
+  } else {
+    html += '<div class="mu-head">'
+      + '<div class="mu-team"><div class="mu-name">' + esc(you.side.name) + '</div>'
+      + '<div class="mu-pts">' + pts1(you.locked) + '</div></div>'
+      + '<div class="mu-odds"><div class="mu-pct">—</div><div class="mu-label">odds '
+      + 'unavailable</div></div>'
+      + '<div class="mu-team them"><div class="mu-name">' + esc(opp.side.name) + '</div>'
+      + '<div class="mu-pts">' + pts1(opp.locked) + '</div></div></div>';
+  }
+
+  var status = countsText([you, opp]).text, extra = [];
+  if (you.side.espnWinProb !== null && entry.sim) {
+    extra.push('ESPN’s own number: ' + winPct(you.side.espnWinProb));
+  }
+  html += '<div class="mu-status">' + esc(status)
+    + (extra.length ? ' · ' + esc(extra.join(' · ')) : '') + '</div>';
+
+  var warn = [];
+  if (!clocks) {
+    warn.push('The NFL scoreboard could not be reached, so the odds are withheld: without '
+      + 'it there is no telling whose game is already over, and adding a finished '
+      + 'player’s projection on top of his points would count him twice.');
+  }
+  if (you.unknown + opp.unknown) {
+    warn.push((you.unknown + opp.unknown) + ' starter' + (you.unknown + opp.unknown === 1
+      ? ' is' : 's are') + ' outside what the odds can measure — not in our data, or at a '
+      + 'position with no fitted range — so they count at their points so far plus a '
+      + 'flat share of their projection, with no spread around it.');
+  }
+  var gap = you.gap + opp.gap, gapN = you.gapN + opp.gapN;
+  if (gapN >= 2 && Math.abs(gap) > 1) {
+    warn.push('On the ' + gapN + ' finished players both sources have scored, the live '
+      + 'rescoring comes out ' + pts1(Math.abs(gap)) + ' points ' + (gap > 0 ? 'above' : 'below')
+      + ' ESPN’s own numbers — your Settings tab probably does not match this league’s '
+      + 'scoring, so the live figures will drift from ESPN’s until you paste again.');
+  }
+  if (warn.length) html += '<div class="note">' + warn.join('<br>') + '</div>';
+
+  html += '<div class="lineups">' + lineupTable(you, you.side.name)
+    + lineupTable(opp, opp.side.name) + '</div>';
+  host.innerHTML = html;
+}
+
+function renderLeagueMatches(entries) {
+  var host = document.getElementById('leaguematches');
+  if (!entries.length) {
+    host.innerHTML = '<div class="empty">No matchups found for this week.</div>';
+    return;
+  }
+  var html = '<div class="games">';
+  for (var i = 0; i < entries.length; i++) {
+    var en = entries[i], c = countsText(en.models);
+    html += '<div class="game' + (en.mineAt >= 0 ? ' mine' : '') + '">'
+      + '<div class="when' + (c.live ? ' live' : '') + '">'
+      + (c.live ? 'Live · ' : '') + esc(c.text || (en.models.length < 2 ? 'Bye' : '')) + '</div>';
+    for (var s = 0; s < en.models.length; s++) {
+      var m = en.models[s], p = null;
+      if (en.sim) p = s === 0 ? en.sim.p : 1 - en.sim.p;
+      html += '<div class="side"><span class="mteam">' + esc(m.side.name) + '</span>'
+        + (p === null ? '' : '<span class="gspr ' + (p >= 0.5 ? 'fav' : 'dog') + '">'
+          + winPct(p) + '</span>')
+        + (en.sim ? '<span class="gimp">' + pts1(en.sim.finals[s].mean) + '</span>' : '')
+        + '<span class="pts">' + pts1(m.locked) + '</span></div>';
+    }
+    html += '</div>';
+  }
+  host.innerHTML = html + '</div>';
+}
+
+function paintMatchup() {
+  var data = matchState.data;
+  if (!data) return;
+  var clocks = matchState.board ? nflClock(matchState.board) : null;
+  var mineId = myTeamId(), entries = [], mine = null;
+  for (var i = 0; i < data.matchups.length; i++) {
+    var m = data.matchups[i], models = [], mineAt = -1, seed = matchState.key + '|' + m.id;
+    for (var s = 0; s < m.sides.length; s++) {
+      models.push(sideModel(m.sides[s], data, clocks));
+      if (m.sides[s].teamId === mineId) mineAt = s;
+      seed += '|' + pts1(models[s].locked);
+    }
+    var sim = models.length === 2 && clocks ? simulateMatch(models, seed) : null;
+    var entry = { models: models, sim: sim, mineAt: mineAt };
+    if (mineAt >= 0 && models.length === 2) mine = entry;
+    entries.push(entry);
+  }
+  // Yours first in the league grid too, so the card you care about is never below the fold.
+  entries.sort(function (a, b) { return (b.mineAt >= 0) - (a.mineAt >= 0); });
+  renderMyMatch(mine, clocks);
+  renderLeagueMatches(entries);
+
+  var tag = document.getElementById('matchsource');
+  if (data.source === 'espn-paste') {
+    tag.textContent = 'ESPN · pasted ' + new Date(data.fetchedAt).toLocaleTimeString([], {
+      hour: 'numeric', minute: '2-digit' }) + ' · live rescoring';
+  } else {
+    tag.textContent = (data.source === 'sleeper' ? 'Sleeper' : 'ESPN') + ' · official';
+  }
+  document.getElementById('matchnote').innerHTML = matchMethodNote(data);
+
+  var anyLive = false;
+  for (i = 0; i < entries.length; i++) if (countsText(entries[i].models).live) anyLive = true;
+  scheduleMatchRefresh(anyLive);
+}
+
+/* EVERY CLAIM IN THIS NOTE IS READ OFF THE FIXTURE. The calibration will move when the
+   grids are refitted, and a sentence written against today's numbers would go on saying
+   them — the draft tab's lesson. */
+function matchMethodNote(data) {
+  var cal = WINPROB.calibration || {}, pre = cal.pregame, stack = cal.stacked;
+  var half = cal['ingame@30'], seasons = WINPROB.seasons || [];
+  var span = seasons.length ? seasons[0] + '–' + seasons[seasons.length - 1] : '';
+  var note = '<b>How the percentage is made.</b> Each starter’s week is drawn '
+    + MATCH_SIMS.toLocaleString() + ' times from what really happened to players '
+    + 'projected like him at his position — the model’s own misses for QB/RB/WR/TE, the '
+    + 'market’s for kickers and defences — and the percentage is how often your side '
+    + 'comes out ahead. A finished game counts exactly. A game in progress adds his points '
+    + 'so far to a draw of what players like him scored <i>from that point of a game on</i>, '
+    + 'measured from ' + span + ' play-by-play rather than assumed from the clock — and '
+    + 'from players who were running at the same pace';
+  var hot = ((WINPROB.hot_start || {}).RB || {}).r;
+  note += typeof hot === 'number'
+    ? ', because a back with a big first half does get more of the second (r='
+      + hot.toFixed(2) + ' between the two halves).'
+    : '.';
+  if (pre) {
+    var worst = null;
+    for (var i = 0; i < pre.bins.length; i++) {
+      var b = pre.bins[i];
+      if (b.n < 100) continue;
+      if (!worst || Math.abs(b.actual - b.predicted) > Math.abs(worst.actual - worst.predicted)) {
+        worst = b;
+      }
+    }
+    note += '<br><br><b>Whether 60% means 60%.</b> Real ' + span + ' weeks were dealt into '
+      + 'twelve-team leagues — ' + pre.n.toLocaleString() + ' matchups — and each season '
+      + 'was predicted with ranges fitted without it. Favourites were given '
+      + winPct(pre.favourite_predicted) + ' on average and won '
+      + winPct(pre.favourite_actual) + '.';
+    if (worst) {
+      note += ' The widest miss in any band with 100 or more games was '
+        + Math.round(Math.abs(worst.actual - worst.predicted) * 100) + ' points (said '
+        + winPct(worst.predicted) + ', won ' + winPct(worst.actual) + ').';
+    }
+    note += ' Scored by Brier, ' + pre.brier.toFixed(3) + ' against 0.250 for a coin flip.';
+  }
+  if (stack) {
+    var r = ((WINPROB.teammates || {})['QB-WR same team'] || {}).r;
+    note += ' <b>Stacks</b> are where adding players up independently is least true'
+      + (typeof r === 'number' ? ' — a quarterback’s and his receiver’s misses correlate '
+        + 'at r=' + r.toFixed(2) : '') + '. With every quarterback dealt his own receiver, '
+      + 'favourites were given ' + winPct(stack.favourite_predicted) + ' and won '
+      + winPct(stack.favourite_actual) + '.';
+  }
+  if (half) {
+    note += ' <b>At halftime</b>, the same test gave favourites '
+      + winPct(half.favourite_predicted) + ' and they won ' + winPct(half.favourite_actual)
+      + '.';
+  }
+  note += '<br><br><b>Whose numbers.</b> Scores and lineups are your platform’s own, so '
+    + 'they match the app your league is watching. Projections — and so the odds — use the '
+    + 'scoring on your Settings tab; if that does not match your league, the odds are '
+    + 'leaning on the wrong numbers.';
+  if (data && data.source === 'espn-paste') {
+    note += ' This league is private ESPN, so its lineups and official points come from '
+      + 'your last paste. Since then QB/RB/WR/TE are rescored live from Sleeper’s stat '
+      + 'feed under your Settings scoring; kickers and defences stay at the pasted number '
+      + 'until you paste again, because that feed names their stats differently and a '
+      + 'wrong zero is worse than a stale number.';
+  }
+  note += ' ESPN’s own win percentage is shown beside ours where the league is on ESPN. '
+    + 'Nothing on this tab feeds a projection, a ranking or a lineup.';
+  return note;
+}
+
+/* ---- fetching and the paste path ----------------------------------- */
+
+/* THE PICKER OPENS ON THE NFL'S CURRENT WEEK, not the Start / Sit week. On a Sunday the
+   question is this week's matchup, and Start / Sit is as often already looking ahead to
+   next week's lineup. Sleeper's state endpoint says which week it is; once you pick a
+   week yourself, that choice wins and this never moves it again. */
+function detectCurrentWeek() {
+  if (matchState.weekChecked) return;
+  matchState.weekChecked = true;
+  fetchJson('https://api.sleeper.app/v1/state/nfl').then(function (nfl) {
+    if (!nfl || nfl.season_type !== 'regular' || String(nfl.season) !== String(DATA.season)) return;
+    var week = String(nfl.week), picker = document.getElementById('matchweek'), known = false;
+    for (var i = 0; i < DATA.weeks.length; i++) if (String(DATA.weeks[i]) === week) known = true;
+    if (!known || matchState.pickedByUser || picker.value === week) return;
+    picker.value = week;
+    if (currentView === 'matchup') renderMatchup(true);
+  }, function () { /* no current week: the picker keeps the Start / Sit week */ });
+}
+
+function matchWeekOptions() {
+  var picker = document.getElementById('matchweek');
+  if (picker.options.length) return picker;
+  var chosen = state.week, opts = '';
+  for (var w = 0; w < DATA.weeks.length; w++) {
+    opts += '<option value="' + DATA.weeks[w] + '"'
+      + (String(DATA.weeks[w]) === String(chosen) ? ' selected' : '') + '>Week '
+      + DATA.weeks[w] + '</option>';
+  }
+  picker.innerHTML = opts;
+  return picker;
+}
+
+function storedPaste(week) {
+  return (LEAGUE && LEAGUE.matchups && LEAGUE.matchups[week]) || null;
+}
+
+function renderMatchupPasteHelp(week, show) {
+  var box = document.getElementById('matchPasteBox');
+  box.hidden = !show;
+  if (!show) return;
+  var link = '<a href="' + esc(espnMatchupUrl(LEAGUE.league_id, week)) + '" target="_blank" '
+    + 'rel="noopener">this link</a>';
+  document.getElementById('matchpastehelp').innerHTML =
+    '<b>Why this exists.</b> A private league needs your ESPN login cookie, and a browser '
+    + 'will not send it from this site to espn.com — the same wall the roster import hits. '
+    + 'Opening the same address in a tab is a first-party request, so it always works.'
+    + '<br><b>1.</b> Open ' + link + ' (week ' + esc(week) + ') in a tab where you are '
+    + 'signed in to ESPN.'
+    + '<br><b>2.</b> Select all and paste below, <b>or</b> press Ctrl+S and load the saved '
+    + 'file — more reliable, and the only option on a phone.'
+    + '<br><b>3.</b> Paste again whenever you want ESPN’s official numbers. In between, '
+    + 'QB/RB/WR/TE update by themselves.';
+}
+
+/* `auto` marks the minute-by-minute refresh. For a private ESPN league it skips the
+   request ESPN has already refused this session — a doomed 401 every minute of a live
+   Sunday is someone else's server — and goes straight to the paste and live rescoring.
+   The Refresh button is not `auto`, so pressing it always tries ESPN again. */
+function renderMatchup(force, auto) {
+  var status = document.getElementById('matchstatus');
+  var picker = matchWeekOptions();
+  detectCurrentWeek();
+  if (!LEAGUE || !LEAGUE.teams || !LEAGUE.teams.length) {
+    document.getElementById('mymatch').innerHTML = '<div class="empty">Import your league '
+      + 'on the Roster tab and your matchup appears here — the live score, both lineups, '
+      + 'and the chance you win.</div>';
+    document.getElementById('leaguematches').innerHTML = '';
+    document.getElementById('matchsource').textContent = '';
+    document.getElementById('matchPasteBox').hidden = true;
+    document.getElementById('matchnote').innerHTML = matchMethodNote(null);
+    status.textContent = '';
+    return;
+  }
+  var week = picker.value, key = leagueKey(LEAGUE) + '|' + week;
+  if (!force && matchState.key === key && matchState.data) { paintMatchup(); return; }
+  var fresh = matchState.key !== key;
+  matchState.key = key;
+  if (fresh) { matchState.data = null; matchState.board = null; }
+  status.textContent = 'Loading…';
+
+  var board = fetchJson(ESPN_SCOREBOARD + '?seasontype=2&week=' + encodeURIComponent(week)
+                        + '&dates=' + encodeURIComponent(DATA.season))
+    .then(function (payload) { return payload; }, function () { return null; });
+  var known = auto && matchState.refused === leagueKey(LEAGUE);
+  var league = known ? Promise.resolve({ error: { status: 401 } })
+    : fetchLeagueMatchups(LEAGUE, week)
+      .then(function (data) { return { data: data }; }, function (err) { return { error: err }; });
+
+  Promise.all([board, league]).then(function (all) {
+    if (matchState.key !== key) return;       // the week or league changed meanwhile
+    matchState.board = all[0];
+    var got = all[1];
+    if (got.data) {
+      matchState.data = got.data;
+      matchState.refused = null;
+      renderMatchupPasteHelp(week, false);
+      status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+      paintMatchup();
+      return;
+    }
+    var err = got.error || {};
+    if (LEAGUE.platform === 'espn') {
+      /* A refusal from ESPN is almost always the private-league cookie. Offer the paste,
+         and fall back to this week's stored paste — rescored live — if there is one. */
+      matchState.refused = leagueKey(LEAGUE);
+      renderMatchupPasteHelp(week, true);
+      var saved = storedPaste(week);
+      if (saved) {
+        matchState.data = saved;
+        status.textContent = 'Private league — showing your paste, rescoring live…';
+        paintMatchup();
+        loadLiveStats(week, function () {
+          if (matchState.key !== key) return;
+          /* loadLiveStats calls back on failure too, with the feed emptied — so the line
+             must check, or it announces live stats that never arrived. */
+          status.textContent = live.stats
+            ? 'Live stats ' + new Date().toLocaleTimeString()
+              + ' · official points as of your paste'
+            : 'Sleeper’s live stat feed could not be reached — showing your paste as it was';
+          paintMatchup();
+        }, true);
+        return;
+      }
+      document.getElementById('matchPasteBox').open = true;
+      document.getElementById('mymatch').innerHTML = '<div class="empty">'
+        + (err.status === 401 || err.status === 403 || !err.status
+          ? 'ESPN would not hand this league’s matchups to the page — a private league '
+            + 'needs your login cookie, and browsers will not send it from here. Use the '
+            + 'paste box below; it is open.'
+          : 'ESPN answered ' + esc(String(err.status)) + ' for week ' + esc(week) + '.')
+        + '</div>';
+      document.getElementById('leaguematches').innerHTML = '';
+      status.textContent = '';
+      return;
+    }
+    // Not ESPN, so the private-league paste box is about nothing here.
+    document.getElementById('matchPasteBox').hidden = true;
+    document.getElementById('mymatch').innerHTML = '<div class="empty">'
+      + (err.unsupported
+        ? 'This league was not imported from Sleeper or ESPN, so there is no scoreboard to '
+          + 'read. Re-import it on the Roster tab.'
+        : 'Could not reach Sleeper (' + esc(String(err.message || err.status || err))
+          + '). Matchups are fetched live, so this needs a working connection.')
+      + '</div>';
+    document.getElementById('leaguematches').innerHTML = '';
+    status.textContent = '';
+  });
+}
+
+var matchTimer = null;
+function scheduleMatchRefresh(anyLive) {
+  if (matchTimer) { clearTimeout(matchTimer); matchTimer = null; }
+  // Only while a starter's game is live and the tab is open, on the scores-tab rule.
+  if (!anyLive) return;
+  matchTimer = setTimeout(function () {
+    if (currentView === 'matchup') renderMatchup(true, true);
+  }, MATCH_REFRESH_MS);
+}
+
+function setMatchPasteStatus(text, kind) {
+  var node = document.getElementById('matchpastestatus');
+  node.innerHTML = text ? '<span class="tag ' + (kind || '') + '">' + kind + '</span> '
+    + text : '';
+}
+
+function readMatchupFile() {
+  var input = document.getElementById('matchpastefile');
+  var file = input.files && input.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function () {
+    adoptMatchupJson(String(reader.result));
+    input.value = '';
+  };
+  reader.onerror = function () { setMatchPasteStatus('Could not read that file.', 'bad'); };
+  reader.readAsText(file);
+}
+
+/* EVERY WAY A PASTE CAN BE WRONG IS NAMED, because each is otherwise silent: the wrong
+   league imports someone else's scoreboard under your team names, the wrong week shows
+   last Sunday as today, and missing views give matchups with nobody in them. */
+function adoptMatchupJson(text) {
+  var week = document.getElementById('matchweek').value;
+  var payload = parseLoose(text.replace(/^\s+|\s+$/g, ''));
+  if (!payload) {
+    setMatchPasteStatus('That is not JSON. If your browser shows JSON as a collapsible '
+      + 'tree (Firefox does), click <b>Raw Data</b> first — or press Ctrl+S on that tab and '
+      + 'load the saved file instead.', 'bad');
+    return;
+  }
+  if (!payload.schedule || !payload.schedule.length) {
+    setMatchPasteStatus('That JSON has no <code>schedule</code> in it, so it is not the '
+      + 'matchup page. Use the link above — it asks for <code>view=mMatchupScore</code>.',
+      'bad');
+    return;
+  }
+  if (LEAGUE.league_id && payload.id && String(payload.id) !== String(LEAGUE.league_id)) {
+    setMatchPasteStatus('That is league <b>' + esc(String(payload.id)) + '</b>, and the one '
+      + 'on screen is <b>' + esc(String(LEAGUE.league_id)) + '</b>. Switch leagues first, '
+      + 'or use the link above.', 'bad');
+    return;
+  }
+  if (payload.seasonId && String(payload.seasonId) !== String(DATA.season)) {
+    setMatchPasteStatus('That is the <b>' + esc(String(payload.seasonId)) + '</b> season; '
+      + 'these projections are for <b>' + DATA.season + '</b>.', 'bad');
+    return;
+  }
+  if (payload.scoringPeriodId && String(payload.scoringPeriodId) !== String(week)) {
+    setMatchPasteStatus('That page is week <b>' + esc(String(payload.scoringPeriodId))
+      + '</b> and this tab is showing week <b>' + esc(week) + '</b>. Pick week '
+      + esc(String(payload.scoringPeriodId)) + ' above, or use the link above for week '
+      + esc(week) + '.', 'bad');
+    return;
+  }
+  var data = espnMatchups(payload, week, 'espn-paste');
+  var starters = 0;
+  for (var i = 0; i < data.matchups.length; i++) {
+    for (var s = 0; s < data.matchups[i].sides.length; s++) {
+      starters += data.matchups[i].sides[s].starters.length;
+    }
+  }
+  if (!data.matchups.length || !starters) {
+    setMatchPasteStatus('Found ' + data.matchups.length + ' matchups and no lineups, which '
+      + 'means <code>view=mBoxscore</code> was missing from the address. Use the link '
+      + 'above.', 'bad');
+    return;
+  }
+  /* Kept per league and per week, and only the latest few weeks: a snapshot is a few KB,
+     and a season of them is not worth keeping in someone's browser. */
+  LEAGUE.matchups = LEAGUE.matchups || {};
+  LEAGUE.matchups[week] = data;
+  var weeks = [];
+  for (var k in LEAGUE.matchups) {
+    if (Object.prototype.hasOwnProperty.call(LEAGUE.matchups, k)) weeks.push(+k);
+  }
+  weeks.sort(function (a, b) { return b - a; });
+  for (i = 3; i < weeks.length; i++) delete LEAGUE.matchups[weeks[i]];
+  save();
+  document.getElementById('matchpastejson').value = '';
+  document.getElementById('matchPasteBox').open = false;
+  setMatchPasteStatus('Loaded ' + data.matchups.length + ' matchups, ' + starters
+    + ' starters.', 'good');
+  renderMatchup(true);
 }
 
 function renderCatchingBacks() {
@@ -5084,6 +6413,9 @@ function adoptLeague(result) {
     if (was.config) rec.config = cloneConfig(was.config);
     if (was.slots) rec.slots = copy(was.slots);
     if (was.format) rec.format = was.format;
+    /* Pasted matchups are the only copy a private ESPN league has of its scoreboard,
+       and refreshing the roster must not throw away this week's paste. */
+    if (was.matchups) rec.matchups = was.matchups;
     state.leagues[at] = rec;
   } else {
     state.leagues.push(rec);
@@ -8289,6 +9621,9 @@ function render() {
      paying that on every keystroke in the scoring panel would make the whole page
      feel broken. Same reasoning as the scores tab fetching on open. */
   if (currentView === 'trade') renderTrade();
+  /* The odds rest on projections, and projections follow the scoring panel — so a
+     change there repaints the matchup from what is already fetched, never refetches. */
+  if (currentView === 'matchup') renderMatchup(false);
   renderRoster();
   renderLeague();
   renderDraft();
@@ -8319,6 +9654,9 @@ document.addEventListener('click', function (event) {
     // look at them, and this is someone else's server.
     if (currentView === 'scores') renderScores(false);
     else scheduleScoreRefresh(false);
+    // Same rule for the fantasy scoreboard: fetched on open, polled only while open.
+    if (currentView === 'matchup') renderMatchup(false);
+    else scheduleMatchRefresh(false);
     // Trades are computed on open for the same reason, but the cost is local: the
     // optimiser runs hundreds of times to grade a league's worth of swaps. The draft
     // tab's report card is the same trade-off — a league's worth of lineups.
@@ -8398,6 +9736,12 @@ document.addEventListener('click', function (event) {
     loadPastedLeague();
   } else if (target.id === 'refreshscores') {
     renderScores(true);
+  } else if (target.id === 'refreshmatch') {
+    renderMatchup(true);
+  } else if (target.id === 'matchpasteload') {
+    var pasted = document.getElementById('matchpastejson').value.replace(/^\s+|\s+$/g, '');
+    if (!pasted) setMatchPasteStatus('Nothing pasted yet.', 'warn');
+    else adoptMatchupJson(pasted);
   } else if (target.id === 'clearleague') {
     dropLeague(state.activeLeague);
   } else if (target.dataset.useleague) {
@@ -8475,6 +9819,8 @@ var ON_CHANGE = {
      fake path — so the handler reads it back off the input. */
   pastefile: readLeagueFile,
   scoreweek: function () { renderScores(true); },
+  matchweek: function () { matchState.pickedByUser = true; renderMatchup(true); },
+  matchpastefile: readMatchupFile,
   tradepartner: function (v) {
     tradeState.partner = v === '' ? null : +v;
     /* A new partner invalidates what was ticked on their side, never yours. */
