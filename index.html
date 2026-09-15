@@ -209,6 +209,7 @@
   .tab[data-view="season"]   { --tabhue: #f0b84e; }
   .tab[data-view="draft"]    { --tabhue: #f08155; }
   .tab[data-view="matchup"]  { --tabhue: #e7c64a; }
+  .tab[data-view="report"]   { --tabhue: #9ad26a; }
   .tab[data-view="scores"]   { --tabhue: #c2477e; }
   .tab[data-view="roster"]   { --tabhue: #4fc9d8; }
   .tab[data-view="settings"] { --tabhue: #bcc4ce; }
@@ -244,6 +245,40 @@
   #view-draft    { --section: #d95926; }
   #view-scores   { --section: #b83d70; }
   #view-matchup  { --section: #b38a12; }
+  #view-report   { --section: #4f8a25; }
+
+  /* The weekly report. One card per player, edged in his team's colour — decoration,
+     since the badge beside his name always carries the abbreviation. Usage sits in the
+     pills under the prose so the numbers the sentences quote are one glance away. */
+  .rep-sum { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .rep-fig {
+    border: 1px solid var(--line-soft); border-radius: var(--radius);
+    background: var(--panel-tint); padding: 10px 12px;
+  }
+  .rep-big { font-size: 26px; font-weight: 850; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .rep-cap { font-size: 12px; color: var(--dim); }
+  .rep-list { display: grid; gap: 10px; }
+  .rep {
+    border: 1px solid var(--line-soft); border-left: 4px solid var(--team, var(--line));
+    border-radius: var(--radius); background: var(--panel-tint); padding: 11px 14px;
+  }
+  .rep-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .rep-name { font-weight: 800; font-size: 15px; margin-right: 4px; }
+  .rep-game { font-size: 12px; color: var(--dim); margin-left: 6px; }
+  .rep-pts { margin-left: auto; text-align: right; font-variant-numeric: tabular-nums; }
+  .rep-pts b { font-size: 22px; font-weight: 850; }
+  .rep-sub { display: block; font-size: 11px; color: var(--muted); }
+  .rep-hl { font-weight: 750; margin: 8px 0 3px; }
+  .rep-body { margin: 0; line-height: 1.55; }
+  .rep-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .rep-stat {
+    font-size: 11px; padding: 2px 8px; border-radius: 20px; color: var(--dim);
+    background: var(--panel-2); font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .rep-next {
+    margin-top: 8px; padding-top: 7px; font-size: 12px; color: var(--dim);
+    border-top: 1px dashed var(--line-soft);
+  }
   #view-roster   { --section: #2aa8b8; }
 
   /* Your fantasy matchup. Two scores either side of the one number people came for, so
@@ -834,14 +869,15 @@
           aria-label="Which of your leagues"></select>
   <div class="tabs" role="tablist">
     <button class="tab" role="tab" data-view="startsit" aria-selected="true">Start / Sit</button>
+    <button class="tab" role="tab" data-view="matchup" aria-selected="false">Fantasy Scores</button>
+    <button class="tab" role="tab" data-view="report" aria-selected="false">Weekly Report</button>
     <button class="tab" role="tab" data-view="rankings" aria-selected="false">Rankings</button>
     <button class="tab" role="tab" data-view="waivers" aria-selected="false">Waivers</button>
-    <button class="tab" role="tab" data-view="season" aria-selected="false">Season Insights</button>
     <button class="tab" role="tab" data-view="trade" aria-selected="false">Trades</button>
-    <button class="tab" role="tab" data-view="draft" aria-selected="false">Draft</button>
-    <button class="tab" role="tab" data-view="matchup" aria-selected="false">Fantasy Scores</button>
     <button class="tab" role="tab" data-view="scores" aria-selected="false">NFL Scores</button>
     <button class="tab" role="tab" data-view="roster" aria-selected="false">Roster</button>
+    <button class="tab" role="tab" data-view="season" aria-selected="false">Season Insights</button>
+    <button class="tab" role="tab" data-view="draft" aria-selected="false">Draft</button>
     <button class="tab" role="tab" data-view="settings" aria-selected="false">Settings</button>
   </div>
 </header>
@@ -1230,6 +1266,36 @@
     <div class="card">
       <h2>Where the odds come from</h2>
       <div class="note" id="matchnote" style="margin-top:0"></div>
+    </div>
+  </section>
+
+  <!-- THE WEEKLY REPORT. What happened to your team, read the way a manager reads a box
+       score: usage first, points second, and where each player fits next week. Built in
+       the browser from Sleeper's stat feed when the tab opens. See renderReport. -->
+  <section class="view" id="view-report" hidden>
+    <div class="card">
+      <h2>Weekly report <span class="tag" id="reportsource"></span></h2>
+      <div class="row" style="margin-bottom:10px; align-items:flex-end">
+        <div>
+          <label for="reportweek">Week</label>
+          <select id="reportweek"></select>
+        </div>
+        <div><button class="primary" id="refreshreport">Refresh</button></div>
+        <div class="note" id="reportstatus" style="margin:0"></div>
+      </div>
+      <div id="reportsummary"></div>
+    </div>
+    <div class="card">
+      <h2>Your starters</h2>
+      <div id="reportstarters"></div>
+    </div>
+    <div class="card">
+      <h2>Your bench</h2>
+      <div id="reportbench"></div>
+    </div>
+    <div class="card">
+      <h2>How the report is written</h2>
+      <div class="note" id="reportnote" style="margin-top:0"></div>
     </div>
   </section>
 
@@ -1684,7 +1750,7 @@ function optimize(entries) {
 }
 
 /* ------------------------------------------------------------------ *
- * Rendering — full redraw, like tic-tac-toe.html. Mutate state, call
+ * Rendering — full redraw. Mutate state, call
  * render(); never patch the DOM directly.
  * ------------------------------------------------------------------ */
 function entryFor(player, week) {
@@ -4023,8 +4089,14 @@ function renderLines() {
     if (entry) rows.push({ p: p, e: entry });
   }
   if (!rows.length) {
-    host.innerHTML = '<div class="empty">No ' + esc(unit) + ' lines posted for '
-      + esc(position) + ' yet. Books put season markets up through the summer.</div>';
+    /* After kickoff the books take season-long markets down, and "not posted yet" would
+       promise lines that are not coming until next summer. */
+    host.innerHTML = (DATA.facts || {}).lines_status === 'closed'
+      ? '<div class="empty">Season-long markets closed when the season kicked off — books '
+        + 'take them down once games are played, so there are no lines to compare against '
+        + 'until they reopen next summer.</div>'
+      : '<div class="empty">No ' + esc(unit) + ' lines posted for '
+        + esc(position) + ' yet. Books put season markets up through the summer.</div>';
     note.textContent = '';
     return;
   }
@@ -6326,6 +6398,900 @@ function renderRoster() {
       if (live.statsWeek === state.week) renderRoster();
     });
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * WEEKLY REPORT — what happened to your team, player by player.
+ *
+ * Every fantasy app shows the box score. None of them read it the way a manager does on
+ * Tuesday morning: did the WORK hold up, whatever the points said? Three catches on six
+ * targets is a better week for a tight end than his points look, and a back who
+ * out-snapped his partner but got fewer carries is the thing to watch before the partner
+ * is. So each card leads with usage — snaps and carries for backs, targets for
+ * receivers, targets and snaps for tight ends — and the points come second.
+ *
+ * EVERY SENTENCE IS BUILT FROM A NUMBER ON THE CARD. The prose is templated, never
+ * generated, and a clause with no fact behind it is dropped rather than softened. The
+ * role words ("lead back", "split", "part-time") are DEFINITIONS the note prints, not
+ * measurements, and nothing here reaches a projection, a ranking or a lineup.
+ *
+ * ROUTES RUN ARE NOT IN ANY FREE FEED. Sleeper's weekly stats carry snaps, carries,
+ * red-zone carries and targets but no routes, and nflverse's route charting publishes
+ * once a season. A tight end's card therefore uses his share of offensive snaps and
+ * calls it snaps. Snaps overstate routes by however much he blocked, which is why the
+ * word "routes" never appears on a card.
+ *
+ * THE TEAM_ ROWS ARE WHAT MAKE THE SHARES EXACT. Sleeper's feed carries a `TEAM_BAL`
+ * row with the team's own carries, targets and red-zone carries, so "65% of the Ravens'
+ * carries" is a division of two published numbers — not a sum over whichever players
+ * this build happens to project, which would miss every practice-squad call-up.
+ *
+ * Sources: that feed (required), ESPN's scoreboard for the result, and the league's own
+ * matchup view for who you actually started.
+ * ------------------------------------------------------------------ */
+var reportState = { stats: {}, boards: {}, lineups: {}, key: null, ready: null,
+                    pending: null, weekChecked: false, pickedByUser: false };
+
+/* Display tiers for the headline — top-N at the position that week. A tight end or a
+   quarterback is judged against the twelve a league starts, a back or receiver against
+   twenty-four, because that is where "startable" sits. */
+var REPORT_TIERS = { QB: [3, 12, 20], RB: [5, 24, 36], WR: [5, 24, 36], TE: [3, 12, 20] };
+var REPORT_POS_WORD = { QB: 'quarterback', RB: 'running back', WR: 'receiver', TE: 'tight end' };
+/* Platform slot names, beyond the plain positions, and who can fill them. */
+var REPORT_SLOT_OK = { FLEX: FLEX_OK, SUPERFLEX: SUPERFLEX_OK, OP: SUPERFLEX_OK,
+                       'RB/WR': { RB: 1, WR: 1 }, 'W/R': { RB: 1, WR: 1 },
+                       'WR/TE': { WR: 1, TE: 1 }, 'W/T': { WR: 1, TE: 1 }, TQB: { QB: 1 } };
+
+function reportSlotOk(slot, position) {
+  var ok = REPORT_SLOT_OK[slot];
+  return ok ? !!ok[position] : slot === position;
+}
+
+function reportNum(x) { return Math.round(x || 0); }
+function reportPct(x) { return Math.round(x * 100) + '%'; }
+function reportPlural(n, word, many) {
+  n = reportNum(n);
+  return n + ' ' + (n === 1 ? word : (many || word + 's'));
+}
+
+/* A stable choice between phrasings, so a card reads the same on every reload rather
+   than reshuffling its wording each time the tab repaints. */
+function reportPick(f, options) {
+  var seed = String(f.player.gsis_id) + '|' + f.week, h = 0;
+  for (var i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 9973;
+  return options[h % options.length];
+}
+
+function reportWeekOptions() {
+  var picker = document.getElementById('reportweek');
+  if (picker.options.length) return picker;
+  var opts = '';
+  for (var w = 0; w < DATA.weeks.length; w++) {
+    opts += '<option value="' + DATA.weeks[w] + '"'
+      + (String(DATA.weeks[w]) === String(state.week) ? ' selected' : '') + '>Week '
+      + DATA.weeks[w] + '</option>';
+  }
+  picker.innerHTML = opts;
+  return picker;
+}
+
+/* How many players logged a game. A week nobody has played yet is told apart by `gp`,
+   not by whether the feed answered — it answers for future weeks too. */
+function reportPlayedCount(payload) {
+  var n = 0;
+  for (var id in payload) {
+    if (Object.prototype.hasOwnProperty.call(payload, id) && payload[id] && payload[id].gp > 0) n++;
+  }
+  return n;
+}
+
+function reportFetchStats(week, force) {
+  if (!force && reportState.stats[week]) return Promise.resolve(reportState.stats[week]);
+  return fetchJson(SLEEPER_STATS + DATA.season + '/' + week).then(function (payload) {
+    reportState.stats[week] = payload || {};
+    return reportState.stats[week];
+  });
+}
+
+/* The result is nice to have, never required: a failure resolves null and the cards
+   simply print no score. */
+function reportFetchBoard(week, force) {
+  if (!force && reportState.boards[week]) return Promise.resolve(reportState.boards[week]);
+  return fetchJson(ESPN_SCOREBOARD + '?seasontype=2&week=' + encodeURIComponent(week)
+                   + '&dates=' + encodeURIComponent(DATA.season))
+    .then(function (payload) { reportState.boards[week] = payload; return payload; },
+          function () { return null; });
+}
+
+/* WHO YOU ACTUALLY STARTED. The Fantasy Scores tab may already hold it; otherwise the
+   platform is asked. A private ESPN league that refused this session is not asked again
+   and falls back to a stored paste. Resolves null when none of that works, and the
+   report then says which lineup it used instead — it never silently substitutes. */
+function reportFetchLineup(week, force) {
+  if (!LEAGUE || !LEAGUE.teams || !LEAGUE.teams.length) return Promise.resolve(null);
+  var key = leagueKey(LEAGUE) + '|' + week;
+  if (!force && Object.prototype.hasOwnProperty.call(reportState.lineups, key)) {
+    return Promise.resolve(reportState.lineups[key]);
+  }
+  if (matchState.key === key && matchState.data) {
+    reportState.lineups[key] = matchState.data;
+    return Promise.resolve(matchState.data);
+  }
+  var saved = LEAGUE.platform === 'espn' ? storedPaste(week) : null;
+  if (LEAGUE.platform === 'espn' && matchState.refused === leagueKey(LEAGUE)) {
+    reportState.lineups[key] = saved;
+    return Promise.resolve(saved);
+  }
+  return fetchLeagueMatchups(LEAGUE, week).then(function (data) {
+    reportState.lineups[key] = data;
+    return data;
+  }, function () {
+    reportState.lineups[key] = saved;
+    return saved;
+  });
+}
+
+/* THE PICKER OPENS ON THE LAST WEEK WITH GAMES IN IT. Sleeper's state says which NFL week
+   it is; early in that week nothing has been played, so the report is about the one
+   before. Once you pick a week yourself, that choice wins. */
+function detectReportWeek() {
+  if (reportState.weekChecked) return;
+  reportState.weekChecked = true;
+  fetchJson('https://api.sleeper.app/v1/state/nfl').then(function (nfl) {
+    if (!nfl || nfl.season_type !== 'regular' || String(nfl.season) !== String(DATA.season)) {
+      return null;
+    }
+    var week = +nfl.week;
+    return reportFetchStats(String(week), false).then(function (payload) {
+      return reportPlayedCount(payload) < 100 && week > 1 ? String(week - 1) : String(week);
+    });
+  }).then(function (week) {
+    if (!week || reportState.pickedByUser) return;
+    var picker = document.getElementById('reportweek'), known = false;
+    for (var i = 0; i < DATA.weeks.length; i++) if (String(DATA.weeks[i]) === week) known = true;
+    if (!known || picker.value === week) return;
+    picker.value = week;
+    if (currentView === 'report') renderReport(false);
+  }, function () { /* no current week: the picker keeps the Start / Sit week */ });
+}
+
+/* Every projected QB/RB/WR/TE with a game this week, scored under the Settings config and
+   ranked at his position. Built per paint, so it follows the scoring panel. */
+function reportPool(week) {
+  var payload = reportState.stats[week] || {}, byId = {}, byPos = {}, i, pos;
+  for (i = 0; i < PLAYERS.length; i++) {
+    var p = PLAYERS[i];
+    if (!LIVE_SCORABLE[p.position] || !p.sleeper_id) continue;
+    var raw = payload[p.sleeper_id];
+    if (!raw || !(raw.gp > 0)) continue;
+    var rec = { player: p, raw: raw, points: score(raw), rank: 0 };
+    byId[p.gsis_id] = rec;
+    (byPos[p.position] = byPos[p.position] || []).push(rec);
+  }
+  for (pos in byPos) {
+    if (!Object.prototype.hasOwnProperty.call(byPos, pos)) continue;
+    byPos[pos].sort(function (a, b) { return b.points - a.points; });
+    for (i = 0; i < byPos[pos].length; i++) byPos[pos][i].rank = i + 1;
+  }
+  return { byId: byId, byPos: byPos };
+}
+
+/* team -> its game: points, opponent's points, nickname, whether it is over. */
+function reportGames(board) {
+  var teams = {}, events = (board && board.events) || [], total = 0, n = 0, allDone = !!events.length;
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i], comp = (ev.competitions || [])[0] || {}, st = gameState(ev);
+    var sides = comp.competitors || [];
+    if (!st.done) allDone = false;
+    if (sides.length !== 2) continue;
+    for (var s = 0; s < 2; s++) {
+      var me = sides[s], them = sides[1 - s];
+      teams[canonTeam((me.team || {}).abbreviation)] = {
+        name: (me.team || {}).shortDisplayName || '',
+        pts: +(me.score || 0), oppPts: +(them.score || 0),
+        state: st.state, done: st.done
+      };
+      if (st.done) { total += +(me.score || 0); n++; }
+    }
+  }
+  return { teams: teams, avg: n ? total / n : null, allDone: allDone };
+}
+
+/* "the Ravens’" when the scoreboard named the team, "BAL’s" when it did not. */
+function reportTeamPoss(ctx, abbr) {
+  var game = ctx.games.teams[abbr];
+  if (game && game.name) {
+    return 'the ' + esc(game.name) + (/s$/.test(game.name) ? '’' : '’s');
+  }
+  return esc(abbr) + '’s';
+}
+
+/* How the opponent treated this position LAST season, flipped so a stingy defence reads
+   as "4th-fewest" — the same flip matchupCause makes, for the same reason. */
+function reportDefence(position, opponent) {
+  var table = (FACTS.defense_allowed || {})[position];
+  if (!table || !opponent || !table[opponent]) return null;
+  var teams = 0, key;
+  for (key in table) if (Object.prototype.hasOwnProperty.call(table, key)) teams++;
+  var rank = table[opponent][0], soft = rank * 2 <= teams;
+  return { soft: soft, place: soft ? rank : teams + 1 - rank, perGame: table[opponent][1] };
+}
+
+function reportAge(player, week) {
+  var parts = String(player.birth_date || '').split('-');
+  if (parts.length < 3) return null;
+  // Opening Sunday falls in the second week of September; a week either side cannot
+  // change anyone's age by more than the one birthday this handles.
+  var game = new Date(+DATA.season, 8, 7 + 7 * (+week - 1));
+  var age = game.getFullYear() - +parts[0];
+  var month = game.getMonth() + 1;
+  if (month < +parts[1] || (month === +parts[1] && game.getDate() < +parts[2])) age--;
+  return age;
+}
+
+/* Everything a card says, as numbers, before any of it becomes a sentence. */
+function reportFacts(player, week, ctx) {
+  var payload = reportState.stats[week] || {};
+  var raw = (player.sleeper_id && payload[player.sleeper_id]) || {};
+  var w = player.weeks[week] || {};
+  var teamRow = payload['TEAM_' + player.team] || {};
+  var pool = ctx.pool, pos = player.position, rec = pool.byId[player.gsis_id];
+  var f = {
+    player: player, pos: pos, week: week, raw: raw, bye: !!w.is_bye,
+    played: raw.gp > 0, opponent: w.opponent || '', home: !!w.is_home,
+    proj: (w.stats && !w.is_bye && LIVE_SCORABLE[pos]) ? score(w.stats) : null,
+    points: null, rank: null, official: ctx.official[player.gsis_id],
+    game: ctx.games.teams[player.team] || null,
+    snaps: raw.off_snp || 0, teamSnaps: raw.tm_off_snp || 0,
+    car: raw.rush_att || 0, teamCar: teamRow.rush_att || 0,
+    rzCar: raw.rush_rz_att || 0, teamRzCar: teamRow.rush_rz_att || 0,
+    tgt: raw.rec_tgt || 0, teamTgt: teamRow.rec_tgt || 0, rzTgt: raw.rec_rz_tgt || 0,
+    rec: raw.rec || 0, recYd: raw.rec_yd || 0, recTd: raw.rec_td || 0, airYd: raw.rec_air_yd || 0,
+    rushYd: raw.rush_yd || 0, rushTd: raw.rush_td || 0,
+    passAtt: raw.pass_att || 0, passCmp: raw.pass_cmp || 0, passYd: raw.pass_yd || 0,
+    passTd: raw.pass_td || 0, passInt: raw.pass_int || 0,
+    age: reportAge(player, week), rookie: +player.rookie_season === +DATA.season,
+    defence: reportDefence(pos, w.opponent), mate: null, bfCar: 0, tgtRank: 0, carRank: 0,
+    prev: null
+  };
+  if (LIVE_SCORABLE[pos] && f.played) {
+    f.points = rec ? rec.points : score(raw);
+    f.rank = rec ? rec.rank : null;
+  }
+  f.snapPct = f.teamSnaps ? f.snaps / f.teamSnaps : null;
+
+  var i, other;
+  if (pos === 'RB') {
+    f.bfCar = f.car;
+    var backs = pool.byPos.RB || [];
+    for (i = 0; i < backs.length; i++) {
+      other = backs[i];
+      if (other.raw.rush_att > f.car) f.carRank++;
+      if (other.player.team !== player.team || other.player.gsis_id === player.gsis_id) continue;
+      f.bfCar += other.raw.rush_att || 0;
+      var os = other.raw.off_snp || 0, oc = other.raw.rush_att || 0;
+      if (os < 10 && oc < 4) continue;
+      if (!f.mate || os > (f.mate.raw.off_snp || 0)
+          || (os === (f.mate.raw.off_snp || 0) && oc > (f.mate.raw.rush_att || 0))) {
+        f.mate = other;
+      }
+    }
+    f.carRank++;
+  }
+  if (pos !== 'QB') {
+    var above = 0;
+    for (var p in pool.byPos) {
+      if (!Object.prototype.hasOwnProperty.call(pool.byPos, p)) continue;
+      for (i = 0; i < pool.byPos[p].length; i++) {
+        other = pool.byPos[p][i];
+        if (other.player.team === player.team && other.player.gsis_id !== player.gsis_id
+            && (other.raw.rec_tgt || 0) > f.tgt) above++;
+      }
+    }
+    f.tgtRank = above + 1;
+  }
+  var before = reportState.stats[String(+week - 1)];
+  var last = before && player.sleeper_id ? before[player.sleeper_id] : null;
+  if (last && last.gp > 0) {
+    f.prev = { car: last.rush_att || 0, tgt: last.rec_tgt || 0,
+               snapPct: last.tm_off_snp ? (last.off_snp || 0) / last.tm_off_snp : null };
+  }
+  return f;
+}
+
+/* ---- the sentences --------------------------------------------------- */
+
+function reportHeadline(f, ctx) {
+  if (f.bye) return 'On bye.';
+  if (!f.played) {
+    if (f.game && f.game.state === 'pre') return 'His game has not kicked off yet.';
+    var inj = f.player.injury;
+    return 'No snaps recorded.' + (inj && inj.status ? ' Listed ' + esc(inj.status) + ' today.' : '');
+  }
+  if (!LIVE_SCORABLE[f.pos] || !f.rank) return '';
+  var tiers = REPORT_TIERS[f.pos], tag = f.pos + f.rank, text;
+  if (f.rank === 1) {
+    text = reportPick(f, [tag + ' of the week.',
+                          'The best ' + REPORT_POS_WORD[f.pos] + ' in fantasy this week.']);
+  } else if (f.rank <= tiers[0]) {
+    text = 'A top-' + tiers[0] + ' week: ' + tag + '.';
+  } else if (f.rank <= tiers[1]) {
+    text = reportPick(f, ['A solid ' + tag + ' week.', 'Did his job: ' + tag + '.']);
+  } else if (f.rank <= tiers[2]) {
+    text = 'A quiet one: ' + tag + '.';
+  } else {
+    text = reportPick(f, ['A week to forget: ' + tag + '.', 'Rough day: ' + tag + '.']);
+  }
+  if (ctx.mvp === f.player.gsis_id) text += ' And the top scorer on any roster in your league.';
+  if (f.game && !f.game.done) text = 'Game still in progress — so far, ' + text.charAt(0).toLowerCase() + text.slice(1);
+  return text;
+}
+
+function reportVsProjection(f) {
+  if (f.proj === null || f.points === null) return '';
+  var gap = f.points - f.proj;
+  if (Math.abs(gap) < 3) return 'Right about where we projected him (' + f.proj.toFixed(1) + ').';
+  return (gap > 0 ? 'Beat' : 'Fell short of') + ' his ' + f.proj.toFixed(1)
+    + '-point projection by ' + Math.abs(gap).toFixed(1) + '.';
+}
+
+function reportDefenceClause(f) {
+  var d = f.defence;
+  if (!d || d.place > 8) return '';
+  var where = (f.home ? 'against ' : 'at ') + esc(f.opponent);
+  var good = f.rank !== null && f.rank <= REPORT_TIERS[f.pos][1];
+  var ranking = ordinal(d.place) + '-' + (d.soft ? 'most' : 'fewest') + ' points to '
+    + f.pos + 's in ' + FACTS.defense_allowed_season;
+  if (!d.soft) {
+    return good ? 'And he did it ' + where + ', a tough draw: they allowed the ' + ranking + '.'
+                : 'A tough draw ' + where + ', which allowed the ' + ranking + '.';
+  }
+  return good ? 'The matchup helped — ' + esc(f.opponent) + ' allowed the ' + ranking + '.'
+              : 'That came ' + where + ', a defence that allowed the ' + ranking
+                + ', so this was a matchup to win.';
+}
+
+/* Only when the whole offence was well away from the week's average — "the offence
+   around him is a concern" is a claim, and it needs a gap that size behind it. */
+function reportOffenceClause(f, ctx) {
+  var g = f.game;
+  if (!g || !g.done || ctx.games.avg === null) return '';
+  var gap = g.pts - ctx.games.avg, name = g.name ? 'The ' + esc(g.name) : esc(f.player.team);
+  if (gap <= -7) {
+    return name + ' scored only ' + g.pts + ', well under the week’s '
+      + ctx.games.avg.toFixed(1) + '-point average — the offence around him is a concern.';
+  }
+  if (gap >= 7) {
+    return name + ' put up ' + g.pts + ' against a week averaging '
+      + ctx.games.avg.toFixed(1) + ' — an offence worth being part of.';
+  }
+  return '';
+}
+
+/* "Old" is a position: a 30-year-old quarterback is in his prime and a 30-year-old back
+   is past the usual cliff. Display definitions, printed in the note. */
+var REPORT_OLD = { QB: 36, RB: 29, WR: 31, TE: 32 };
+
+function reportAgeClause(f, strong) {
+  if (f.age !== null && REPORT_OLD[f.pos] && f.age >= REPORT_OLD[f.pos] && strong) {
+    return reportPick(f, ['At ' + f.age + ', age is still just a number.',
+                          'Still doing this at ' + f.age + '.']);
+  }
+  if (f.rookie && strong) return 'Not bad for a rookie.';
+  return '';
+}
+
+function reportMateClause(f) {
+  var m = f.mate;
+  if (!m) return '';
+  var name = esc(m.player.name);
+  var s = reportNum(f.snaps), s2 = reportNum(m.raw.off_snp), c = reportNum(f.car);
+  var c2 = reportNum(m.raw.rush_att), t = reportNum(f.tgt), t2 = reportNum(m.raw.rec_tgt);
+  var snapLead = s - s2, carLead = c - c2;
+  if (snapLead >= 0 && carLead >= 0 && (snapLead || carLead)) {
+    return 'Led ' + name + ' in snaps (' + s + '–' + s2 + ') and carries (' + c + '–' + c2 + ').';
+  }
+  if (snapLead > 0 && carLead < 0) {
+    return 'Out-snapped ' + name + ' ' + s + '–' + s2 + ' but had fewer carries (' + c
+      + ' to ' + c2 + ') — the snap lead is the part worth watching.';
+  }
+  if (snapLead < 0 && carLead > 0) {
+    return 'More carries than ' + name + ' (' + c + ' to ' + c2 + ') but fewer snaps ('
+      + s + ' to ' + s2 + ')' + (t2 > t ? ', and ' + name + ' drew ' + reportPlural(t2, 'target')
+        + ' to his ' + t + ' — the passing downs look like ' + name + '’s.' : '.');
+  }
+  if (snapLead || carLead) {
+    return name + ' led him in snaps (' + s2 + '–' + s + ') and carries (' + c2 + '–' + c + ').';
+  }
+  return '';
+}
+
+function reportTrendClause(f) {
+  var p = f.prev;
+  if (!p) return '';
+  if (f.pos === 'RB' && Math.abs(f.car - p.car) >= 5) {
+    return (f.car > p.car ? 'Up' : 'Down') + ' from ' + reportPlural(p.car, 'carry', 'carries')
+      + ' last week.';
+  }
+  if ((f.pos === 'WR' || f.pos === 'TE') && Math.abs(f.tgt - p.tgt) >= 4) {
+    return (f.tgt > p.tgt ? 'Up' : 'Down') + ' from ' + reportPlural(p.tgt, 'target') + ' last week.';
+  }
+  if (f.pos !== 'QB' && p.snapPct !== null && f.snapPct !== null
+      && Math.abs(f.snapPct - p.snapPct) >= 0.15) {
+    return 'His snap share went from ' + reportPct(p.snapPct) + ' last week to '
+      + reportPct(f.snapPct) + '.';
+  }
+  return '';
+}
+
+function reportBody(f, ctx) {
+  var s = [], n = reportNum;
+  if (f.bye || !f.played) return s;
+  var team = reportTeamPoss(ctx, f.player.team);
+
+  if (f.pos === 'QB') {
+    var line = n(f.passCmp) + ' of ' + n(f.passAtt) + ' for ' + n(f.passYd) + ' yards, '
+      + reportPlural(f.passTd, 'touchdown')
+      + (f.passInt ? ' and ' + reportPlural(f.passInt, 'interception') : '');
+    if (f.rushYd >= 20 || f.rushTd) {
+      line += ', plus ' + n(f.rushYd) + ' rushing yards'
+        + (f.rushTd ? ' and ' + reportPlural(f.rushTd, 'rushing touchdown') : '');
+    }
+    s.push(line + '.');
+    s.push(reportDefenceClause(f));
+    s.push(reportVsProjection(f));
+    s.push(reportAgeClause(f, f.rank !== null && f.rank <= 3));
+  } else if (f.pos === 'RB') {
+    var bf = f.bfCar ? f.car / f.bfCar : 0;
+    var work = reportPlural(f.car, 'carry', 'carries');
+    if (f.teamCar) work += ' — ' + reportPct(f.car / f.teamCar) + ' of ' + team + ' ' + n(f.teamCar);
+    if (f.car && f.bfCar > f.car) work += ', and ' + reportPct(bf) + ' of the backfield’s';
+    if (f.snapPct !== null) {
+      work += ' — on ' + n(f.snaps) + ' of ' + n(f.teamSnaps) + ' snaps (' + reportPct(f.snapPct) + ')';
+    }
+    s.push(work + '.');
+    if (f.car >= 10 && bf >= 0.65) s.push('That is a lead-back workload.');
+    else if (f.car && f.mate && bf >= 0.4) s.push('A split backfield.');
+    else if (f.mate && f.car + f.tgt > 0) s.push('A change-of-pace role.');
+    s.push(reportMateClause(f));
+    if (f.rzCar) {
+      var goalLine = f.rzCar >= 3 && f.teamRzCar && f.rzCar / f.teamRzCar >= 0.5
+        ? ' — the goal-line work is his.' : '.';
+      s.push((n(f.rzCar) >= n(f.teamRzCar)
+        ? (n(f.rzCar) === 1 ? 'The team’s only red-zone carry'
+                            : 'All ' + n(f.rzCar) + ' of the team’s red-zone carries')
+        : reportPlural(f.rzCar, 'red-zone carry', 'red-zone carries')
+          + (f.teamRzCar ? ' of the team’s ' + n(f.teamRzCar) : '')) + goalLine);
+    } else if (f.teamRzCar >= 3 && f.car) {
+      s.push('None of the team’s ' + n(f.teamRzCar) + ' red-zone carries went to him.');
+    }
+    if (!f.tgt && f.car >= 12) {
+      s.push('No targets, so everything rode on carries and touchdowns: the volume is there, '
+        + 'the passing-game floor is not.');
+    } else if (f.tgt >= 5) {
+      s.push(reportPlural(f.tgt, 'target') + ' (' + n(f.rec) + ' caught for ' + n(f.recYd)
+        + ' yards) — real passing-game work'
+        + ((state.config.per_stat || {}).rec > 0 ? ', which pays in your scoring even on a slow '
+          + 'day on the ground.' : '.'));
+    } else if (f.tgt) {
+      s.push(reportPlural(f.tgt, 'target') + ', ' + n(f.rec) + ' caught.');
+    }
+    s.push(n(f.rushYd) + ' rushing yards'
+      + (f.rushTd ? ' and ' + reportPlural(f.rushTd, 'touchdown') : '') + '. '
+      + reportVsProjection(f));
+    s.push(reportDefenceClause(f));
+    s.push(reportAgeClause(f, (f.rank !== null && f.rank <= 12) || (f.carRank <= 5 && f.car >= 15)));
+    s.push(reportOffenceClause(f, ctx));
+    s.push(reportTrendClause(f));
+  } else if (f.pos === 'WR' || f.pos === 'TE') {
+    var looks = reportPlural(f.tgt, 'target');
+    if (f.teamTgt) looks += ' — ' + reportPct(f.tgt / f.teamTgt) + ' of ' + team + ' ' + n(f.teamTgt);
+    if (f.tgt && f.tgtRank === 1) looks += ', the most on the team';
+    else if (f.tgt && f.tgtRank <= 3) looks += ', ' + ordinal(f.tgtRank) + ' on the team';
+    s.push(looks + '.');
+    s.push(n(f.rec) + ' ' + (n(f.rec) === 1 ? 'catch' : 'catches') + ' for ' + n(f.recYd) + ' yards'
+      + (f.recTd ? ' and ' + reportPlural(f.recTd, 'touchdown') : '') + '.');
+    if (f.tgt >= 5 && f.rec / f.tgt <= 0.5) {
+      s.push(f.pos === 'TE'
+        ? 'That is not as bad as it looks: ' + reportPlural(f.tgt, 'target')
+          + ' is the number that carries into next week.'
+        : 'Only ' + n(f.rec) + ' of ' + n(f.tgt) + ' caught, but the targets are the part that '
+          + 'tends to repeat.');
+    } else if (f.tgt >= 5 && f.rec >= f.tgt) {
+      s.push('Caught everything thrown his way.');
+    }
+    if (f.snapPct !== null) {
+      if (f.pos === 'TE' && f.snapPct >= 0.7 && f.tgt <= 2) {
+        s.push('On the field for ' + reportPct(f.snapPct) + ' of snaps and barely looked at — '
+          + 'a lot of that time was likely spent blocking.');
+      } else if (f.pos === 'WR' && f.snapPct >= 0.8) {
+        s.push('An every-down role: ' + reportPct(f.snapPct) + ' of snaps.');
+      } else if (f.snapPct < 0.5) {
+        s.push('Only ' + reportPct(f.snapPct) + ' of snaps — a part-time role'
+          + (f.tgt <= 3 ? ', and the worry is volume rather than efficiency.' : '.'));
+      } else {
+        s.push('On the field for ' + reportPct(f.snapPct) + ' of snaps.');
+      }
+    }
+    if (f.pos === 'WR' && f.airYd >= 100) s.push(n(f.airYd) + ' air yards — he is being used downfield.');
+    if (f.rzTgt >= 2) s.push(reportPlural(f.rzTgt, 'red-zone target') + '.');
+    s.push(reportVsProjection(f));
+    s.push(reportDefenceClause(f));
+    s.push(reportAgeClause(f, f.rank !== null && f.rank <= REPORT_TIERS[f.pos][0] * 2));
+    s.push(reportOffenceClause(f, ctx));
+    s.push(reportTrendClause(f));
+  } else if (f.pos === 'K') {
+    var r = f.raw;
+    s.push('Made ' + n(r.fgm) + ' of ' + n(r.fga) + ' field goals'
+      + (r.fgm_lng ? ' (long of ' + n(r.fgm_lng) + ')' : '') + ' and ' + n(r.xpm) + ' of '
+      + n(r.xpa) + ' extra points.');
+  } else if (f.pos === 'DST') {
+    var d = f.raw;
+    s.push('Allowed ' + n(d.pts_allow) + ' points, with ' + reportPlural(d.sack, 'sack') + ', '
+      + reportPlural(d['int'], 'interception') + ' and '
+      + reportPlural(d.fum_rec, 'fumble recovery', 'fumble recoveries')
+      + (d.def_td ? ', plus ' + reportPlural(d.def_td, 'touchdown') : '') + '.');
+  }
+  var out = [];
+  for (var i = 0; i < s.length; i++) if (s[i]) out.push(s[i]);
+  return out;
+}
+
+function reportStats(f) {
+  var n = reportNum, bits = [];
+  if (f.bye || !f.played) return '';
+  if (f.pos === 'QB') {
+    bits.push(n(f.passCmp) + '/' + n(f.passAtt));
+    bits.push(n(f.passYd) + ' pass yd');
+    bits.push(n(f.passTd) + ' TD · ' + n(f.passInt) + ' INT');
+    if (f.raw.rush_att) bits.push(n(f.raw.rush_att) + ' car · ' + n(f.rushYd) + ' yd');
+  } else if (f.pos === 'RB') {
+    if (f.snapPct !== null) bits.push(n(f.snaps) + '/' + n(f.teamSnaps) + ' snaps · ' + reportPct(f.snapPct));
+    bits.push(n(f.car) + ' car' + (f.teamCar ? ' · ' + reportPct(f.car / f.teamCar) + ' of team' : ''));
+    if (f.teamRzCar) bits.push(n(f.rzCar) + ' of ' + n(f.teamRzCar) + ' RZ car');
+    bits.push(n(f.tgt) + ' tgt · ' + n(f.rec) + ' rec');
+  } else if (f.pos === 'WR' || f.pos === 'TE') {
+    if (f.snapPct !== null) bits.push(reportPct(f.snapPct) + ' of snaps');
+    bits.push(n(f.tgt) + ' tgt' + (f.teamTgt ? ' · ' + reportPct(f.tgt / f.teamTgt) + ' share' : ''));
+    bits.push(n(f.rec) + ' rec · ' + n(f.recYd) + ' yd');
+    if (f.pos === 'WR' && f.airYd) bits.push(n(f.airYd) + ' air yd');
+    if (f.rzTgt) bits.push(n(f.rzTgt) + ' RZ tgt');
+  }
+  var html = '';
+  for (var i = 0; i < bits.length; i++) html += '<span class="rep-stat">' + bits[i] + '</span>';
+  return html;
+}
+
+/* Where he fits NEXT week, on the roster you have now: in your best lineup, or how far
+   behind the weakest starter he could replace. The same optimiser Start / Sit uses. */
+function reportNext(player, ctx) {
+  var nw = ctx.nextWeek;
+  if (!nw) return '';
+  var w = player.weeks[nw];
+  if (!w) return '<b>Week ' + nw + ':</b> no projection.';
+  if (w.is_bye) return '<b>Week ' + nw + ':</b> on bye.';
+  var proj = score(w.stats), where = (w.is_home ? 'vs ' : '@ ') + esc(w.opponent);
+  var text = '<b>Week ' + nw + ':</b> ' + where + ', projected ' + proj.toFixed(1) + '.';
+  if (unavailable(player)) return text + ' Currently ' + esc(player.injury.status) + '.';
+  var plan = ctx.nextPlan;
+  if (!plan || state.roster.indexOf(player.gsis_id) < 0) return text;
+  var i, best = null;
+  for (i = 0; i < plan.lineup.length; i++) {
+    var slot = plan.lineup[i];
+    if (slot.entry && slot.entry.player.gsis_id === player.gsis_id) {
+      return text + ' In your best lineup, at ' + esc(slot.slot) + '.';
+    }
+  }
+  for (i = 0; i < plan.lineup.length; i++) {
+    var cand = plan.lineup[i];
+    if (!cand.entry || !eligible(cand.slot, player.position)) continue;
+    if (!best || cand.entry.points < best.entry.points) best = cand;
+  }
+  if (!best) return text + ' No open slot he can fill.';
+  var gap = best.entry.points - proj;
+  if (gap <= 2) {
+    return text + ' Just ' + gap.toFixed(1) + ' behind ' + esc(best.entry.player.name)
+      + ' for your ' + esc(best.slot) + ' spot — a real option if you need one.';
+  }
+  return text + ' ' + gap.toFixed(1) + ' behind ' + esc(best.entry.player.name)
+    + ', your weakest starter he could replace — a bench piece for now.';
+}
+
+function reportCard(f, slot, ctx) {
+  var p = f.player, g = f.game, result = '';
+  if (g && g.state !== 'pre') {
+    result = (g.done ? (g.pts > g.oppPts ? 'W ' : g.pts < g.oppPts ? 'L ' : 'T ') : 'live ')
+      + g.pts + '–' + g.oppPts;
+  }
+  var matchup = f.bye ? 'Bye' : (f.opponent ? (f.home ? 'vs ' : '@ ') + esc(f.opponent) : '');
+  var pts = f.points !== null ? f.points : (typeof f.official === 'number' ? f.official : null);
+  var sub = [];
+  if (f.proj !== null && !f.bye) sub.push('proj ' + f.proj.toFixed(1));
+  if (typeof f.official === 'number' && f.points !== null && Math.abs(f.official - f.points) >= 0.5) {
+    sub.push('league ' + f.official.toFixed(2));
+  }
+  if (f.points === null && typeof f.official === 'number') sub.push('league scoring');
+  if (f.points === null && typeof f.official !== 'number' && f.played) sub.push('points need your league');
+  var headline = reportHeadline(f, ctx), body = reportBody(f, ctx), stats = reportStats(f);
+  var next = reportNext(p, ctx);
+  return '<article class="rep"' + teamStyle(p.team) + '>'
+    + '<div class="rep-head">'
+      + (slot ? '<span class="slotname">' + esc(slot) + '</span>' : '')
+      + avatar(p, true) + chip(p.position) + '<span class="rep-name">' + esc(p.name) + '</span>'
+      + teamBadge(p.team)
+      + '<span class="rep-game">' + [matchup, result].join(matchup && result ? ' · ' : '') + '</span>'
+      + '<span class="rep-pts"><b>' + (pts === null ? '—' : pts.toFixed(1)) + '</b>'
+        + '<span class="rep-sub">' + sub.join(' · ') + '</span></span>'
+    + '</div>'
+    + (headline ? '<div class="rep-hl">' + headline + '</div>' : '')
+    + (body.length ? '<p class="rep-body">' + body.join(' ') + '</p>' : '')
+    + (stats ? '<div class="rep-stats">' + stats + '</div>' : '')
+    + (next ? '<div class="rep-next">' + next + '</div>' : '')
+    + '</article>';
+}
+
+/* A starter the platform named but this build does not project — a card that says so,
+   rather than a player quietly missing from your lineup. */
+function reportUnknownCard(starter) {
+  return '<article class="rep"><div class="rep-head"><span class="slotname">'
+    + esc(starter.slot) + '</span><span class="rep-name">' + esc(starter.name || 'Empty slot')
+    + '</span><span class="rep-pts"><b>' + (+starter.points || 0).toFixed(1) + '</b>'
+    + '<span class="rep-sub">league scoring</span></span></div>'
+    + '<div class="rep-body">' + (starter.empty ? 'No one started here.'
+      : 'Not in this build’s player list, so there is nothing to report beyond the '
+        + 'platform’s points.') + '</div></article>';
+}
+
+/* The lineup the report treats as your starters: the one you set, when the platform can
+   be read, and otherwise the Start / Sit lineup for that week — labelled as such. */
+function reportLineup(week) {
+  var data = LEAGUE ? reportState.lineups[leagueKey(LEAGUE) + '|' + week] : null;
+  var mine = myTeamId(), side = null, other = null, i, j;
+  if (data && mine !== null) {
+    for (i = 0; i < (data.matchups || []).length; i++) {
+      var sides = data.matchups[i].sides || [];
+      for (j = 0; j < sides.length; j++) {
+        if (sides[j].teamId === mine) { side = sides[j]; other = sides[1 - j] || null; }
+      }
+    }
+  }
+  var starters = [], ids = {}, official = {};
+  if (side) {
+    for (i = 0; i < side.starters.length; i++) {
+      var st = side.starters[i];
+      starters.push({ slot: st.slot, player: st.pid ? BY_ID[st.pid] || null : null, raw: st });
+      if (st.pid) { ids[st.pid] = true; official[st.pid] = st.points; }
+    }
+  } else {
+    var entries = [];
+    for (i = 0; i < state.roster.length; i++) {
+      var entry = BY_ID[state.roster[i]] ? entryFor(BY_ID[state.roster[i]], week) : null;
+      if (entry) entries.push(entry);
+    }
+    var plan = optimize(entries);
+    for (i = 0; i < plan.lineup.length; i++) {
+      if (!plan.lineup[i].entry) continue;
+      var pl = plan.lineup[i].entry.player;
+      starters.push({ slot: plan.lineup[i].slot, player: pl, raw: null });
+      ids[pl.gsis_id] = true;
+    }
+  }
+  var bench = [];
+  for (i = 0; i < state.roster.length; i++) {
+    if (!ids[state.roster[i]] && BY_ID[state.roster[i]]) bench.push(BY_ID[state.roster[i]]);
+  }
+  return { starters: starters, bench: bench, side: side, other: other, official: official };
+}
+
+function reportTile(label, value, caption) {
+  return '<div class="rep-fig"><div class="mu-label">' + label + '</div>'
+    + '<div class="rep-big">' + value + '</div><div class="rep-cap">' + caption + '</div></div>';
+}
+
+function reportSummary(week, lineup, starterFacts, benchFacts, ctx) {
+  var tiles = '', i, j, f;
+  if (lineup.side) {
+    var mine = lineup.side, them = lineup.other;
+    var caption = 'No opponent this week';
+    if (them) {
+      var lead = mine.total - them.total;
+      caption = (ctx.games.allDone ? (lead > 0 ? 'Beat ' : lead < 0 ? 'Lost to ' : 'Tied ') : 'vs ')
+        + esc(them.name) + ', ' + them.total.toFixed(2);
+    }
+    tiles += reportTile('Official score', mine.total.toFixed(2), caption);
+  }
+  var total = 0, proj = 0, top = null, miss = null;
+  for (i = 0; i < starterFacts.length; i++) {
+    f = starterFacts[i].facts;
+    if (!f || f.points === null) continue;
+    total += f.points;
+    if (f.proj !== null) proj += f.proj;
+    if (!top || f.points > top.points) top = f;
+    if (f.proj !== null && f.proj >= 5 && (!miss || f.points - f.proj < miss.points - miss.proj)) miss = f;
+  }
+  tiles += reportTile('Starters’ points', total.toFixed(1), 'QB/RB/WR/TE in your Settings scoring · '
+    + 'projected ' + proj.toFixed(1));
+  if (top) {
+    tiles += reportTile('Top performer', top.points.toFixed(1), esc(top.player.name)
+      + (top.rank ? ', ' + top.pos + top.rank + ' of the week' : ''));
+  }
+  if (miss && miss.points - miss.proj <= -3) {
+    tiles += reportTile('Biggest miss', (miss.points - miss.proj).toFixed(1), esc(miss.player.name)
+      + ': ' + miss.points.toFixed(1) + ' against ' + miss.proj.toFixed(1) + ' projected');
+  }
+  /* The best single swap you could have made, bench man for a starter whose slot he can
+     fill. A single swap rather than a re-optimised lineup, because it is a decision you
+     could actually have taken on Sunday and says whose decision it was. */
+  var swap = null;
+  for (i = 0; i < benchFacts.length; i++) {
+    var b = benchFacts[i];
+    if (b.points === null) continue;
+    for (j = 0; j < starterFacts.length; j++) {
+      var s = starterFacts[j].facts;
+      if (!s || s.points === null || !reportSlotOk(starterFacts[j].slot, b.pos)) continue;
+      var gain = b.points - s.points;
+      if (gain > 0 && (!swap || gain > swap.gain)) swap = { gain: gain, bench: b, starter: s, slot: starterFacts[j].slot };
+    }
+  }
+  tiles += swap
+    ? reportTile('Left on your bench', '+' + swap.gain.toFixed(1), esc(swap.bench.player.name) + ' ('
+        + swap.bench.points.toFixed(1) + ') over ' + esc(swap.starter.player.name) + ' ('
+        + swap.starter.points.toFixed(1) + ') at ' + esc(swap.slot))
+    : reportTile('Left on your bench', '0', 'Nobody on your bench outscored a starter whose slot he could fill');
+
+  var source = lineup.side
+    ? 'Starters are the lineup you set on ' + (LEAGUE.platform === 'sleeper' ? 'Sleeper' : 'ESPN') + '.'
+    : (LEAGUE && LEAGUE.teams && LEAGUE.teams.length
+      ? 'Your league’s lineup for week ' + esc(week) + ' could not be read, so starters are '
+        + 'the Start / Sit lineup for that week on your current roster.'
+      : 'No league imported, so starters are the Start / Sit lineup for week ' + esc(week)
+        + ' on your roster.');
+  return '<div class="rep-sum">' + tiles + '</div><div class="note">' + source
+    + ' The bench is your roster as it stands today.</div>';
+}
+
+function reportEmpty(message) {
+  document.getElementById('reportsummary').innerHTML = '<div class="empty">' + message + '</div>';
+  document.getElementById('reportstarters').innerHTML = '';
+  document.getElementById('reportbench').innerHTML = '';
+}
+
+function paintReport(week) {
+  var payload = reportState.stats[week];
+  if (!payload) return;
+  if (!reportPlayedCount(payload)) {
+    reportEmpty('No games have been played in week ' + esc(week) + ' yet. The report fills '
+      + 'in as soon as they are — pick an earlier week to read one that is finished.');
+    return;
+  }
+  var lineup = reportLineup(week);
+  var pool = reportPool(week), nextWeek = null, i;
+  for (i = 0; i < DATA.weeks.length; i++) {
+    if (String(DATA.weeks[i]) === String(+week + 1)) nextWeek = String(DATA.weeks[i]);
+  }
+  var ctx = { pool: pool, games: reportGames(reportState.boards[week]), official: lineup.official,
+              mvp: null, nextWeek: nextWeek, nextPlan: null };
+
+  if (LEAGUE && LEAGUE.teams) {
+    var best = null;
+    for (i = 0; i < LEAGUE.teams.length; i++) {
+      var ids = LEAGUE.teams[i].players || [];
+      for (var j = 0; j < ids.length; j++) {
+        var rec = pool.byId[ids[j]];
+        if (rec && (!best || rec.points > best.points)) best = rec;
+      }
+    }
+    ctx.mvp = best ? best.player.gsis_id : null;
+  }
+  if (nextWeek) {
+    var entries = [];
+    for (i = 0; i < state.roster.length; i++) {
+      var entry = BY_ID[state.roster[i]] ? entryFor(BY_ID[state.roster[i]], nextWeek) : null;
+      if (entry) entries.push(entry);
+    }
+    ctx.nextPlan = optimize(entries);
+  }
+
+  var starterFacts = [], startersHtml = '';
+  for (i = 0; i < lineup.starters.length; i++) {
+    var st = lineup.starters[i];
+    if (!st.player) {
+      startersHtml += reportUnknownCard(st.raw || { slot: st.slot });
+      continue;
+    }
+    var facts = reportFacts(st.player, week, ctx);
+    starterFacts.push({ slot: st.slot, facts: facts });
+    startersHtml += reportCard(facts, st.slot, ctx);
+  }
+  var benchFacts = [], benchHtml = '';
+  for (i = 0; i < lineup.bench.length; i++) benchFacts.push(reportFacts(lineup.bench[i], week, ctx));
+  benchFacts.sort(function (a, b) {
+    var x = a.points === null ? -1 : a.points, y = b.points === null ? -1 : b.points;
+    return y - x;
+  });
+  for (i = 0; i < benchFacts.length; i++) benchHtml += reportCard(benchFacts[i], 'Bench', ctx);
+
+  document.getElementById('reportsummary').innerHTML =
+    reportSummary(week, lineup, starterFacts, benchFacts, ctx);
+  document.getElementById('reportstarters').innerHTML = startersHtml
+    ? '<div class="rep-list">' + startersHtml + '</div>'
+    : '<div class="empty">No starters to report on.</div>';
+  document.getElementById('reportbench').innerHTML = benchHtml
+    ? '<div class="rep-list">' + benchHtml + '</div>'
+    : '<div class="empty">Nobody on your bench.</div>';
+}
+
+function reportNote() {
+  return '<b>What leads each card.</b> Usage before points, because opportunity is what '
+    + 'repeats from one week to the next and efficiency mostly does not — the same reason '
+    + 'the projection model leans on it. Running backs: snaps, carries, share of the '
+    + 'backfield and red-zone carries. Receivers: targets and target share. Tight ends: '
+    + 'targets and snap share.'
+    + '<br><br><b>Routes run are not available.</b> No free feed publishes them week to '
+    + 'week — Sleeper’s stats carry snaps, carries and targets but no routes, and '
+    + 'nflverse’s route charting arrives once a season. A tight end’s card uses his share '
+    + 'of offensive snaps instead and calls it that. Snaps overstate routes by however '
+    + 'much he blocked.'
+    + '<br><br><b>The words are definitions, not measurements.</b> A <i>lead-back</i> '
+    + 'workload is 10+ carries and 65% or more of the backfield’s; a <i>split</i> is '
+    + '40–65%; less is <i>change-of-pace</i>. An <i>every-down</i> receiver played 80% of '
+    + 'snaps and a <i>part-time</i> one under half. A <i>tough</i> or <i>soft</i> draw is '
+    + 'one of the eight defences that allowed the fewest or most points to that position in '
+    + FACTS.defense_allowed_season + '. Age gets a mention only in a strong week and past '
+    + REPORT_OLD.RB + ' for a back, ' + REPORT_OLD.WR + ' for a receiver, ' + REPORT_OLD.TE
+    + ' for a tight end and ' + REPORT_OLD.QB + ' for a quarterback. '
+    + '<i>Right about where we projected</i> means within '
+    + '3 points, and an offence is only called out when it finished 7 points above or '
+    + 'below the week’s average.'
+    + '<br><br><b>Whose numbers.</b> Stats come from Sleeper’s weekly feed, including its '
+    + 'team totals, so every share is a division of two published numbers. Points use the '
+    + 'scoring on your Settings tab, the same as the projection beside them; where your '
+    + 'platform’s official number differs by half a point or more, it is shown as '
+    + '<i>league</i>. Kickers and defences carry your platform’s points when your lineup '
+    + 'could be read, because the feed names their stats differently. The score and the '
+    + 'result come from ESPN’s scoreboard. <i>Next week</i> compares his projection with '
+    + 'your best lineup on the roster you have now. Nothing here feeds a projection, a '
+    + 'ranking or a lineup.';
+}
+
+function renderReport(force) {
+  var picker = reportWeekOptions(), status = document.getElementById('reportstatus');
+  detectReportWeek();
+  document.getElementById('reportnote').innerHTML = reportNote();
+  if (!state.roster.length && !(LEAGUE && LEAGUE.teams && LEAGUE.teams.length)) {
+    reportEmpty('Add players on the Roster tab, or import your league there, and your weekly '
+      + 'report appears here — every player’s usage, what it means, and where he fits next week.');
+    document.getElementById('reportsource').textContent = '';
+    status.textContent = '';
+    return;
+  }
+  var week = picker.value, key = (LEAGUE ? leagueKey(LEAGUE) : 'roster') + '|' + week;
+  if (!force && reportState.ready === key && reportState.stats[week]) { paintReport(week); return; }
+  if (!force && reportState.pending === key) return;
+  reportState.key = key;
+  reportState.pending = key;
+  status.textContent = 'Loading week ' + week + '…';
+  var prev = String(+week - 1);
+  Promise.all([
+    reportFetchStats(week, force),
+    +week > 1 ? reportFetchStats(prev, false).then(null, function () { return null; })
+              : Promise.resolve(null),
+    reportFetchBoard(week, force),
+    reportFetchLineup(week, force)
+  ]).then(function () {
+    if (reportState.pending === key) reportState.pending = null;
+    if (reportState.key !== key) return;
+    reportState.ready = key;
+    document.getElementById('reportsource').textContent = 'Sleeper stats';
+    status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    paintReport(week);
+  }, function (err) {
+    if (reportState.pending === key) reportState.pending = null;
+    if (reportState.key !== key) return;
+    reportEmpty('Could not reach Sleeper’s stat feed (' + esc(String((err && err.message) || err))
+      + '). The report is built from it when you open this tab, so it needs a working connection.');
+    status.textContent = '';
+  });
 }
 
 /* ------------------------------------------------------------------ *
@@ -9624,6 +10590,8 @@ function render() {
   /* The odds rest on projections, and projections follow the scoring panel — so a
      change there repaints the matchup from what is already fetched, never refetches. */
   if (currentView === 'matchup') renderMatchup(false);
+  /* Repaints from what is already fetched, so a scoring change rewrites the report. */
+  if (currentView === 'report') renderReport(false);
   renderRoster();
   renderLeague();
   renderDraft();
@@ -9657,6 +10625,9 @@ document.addEventListener('click', function (event) {
     // Same rule for the fantasy scoreboard: fetched on open, polled only while open.
     if (currentView === 'matchup') renderMatchup(false);
     else scheduleMatchRefresh(false);
+    // The weekly report is fetched on open too. It does not poll: it is about a week
+    // that is over, and Refresh is there for one that is not.
+    if (currentView === 'report') renderReport(false);
     // Trades are computed on open for the same reason, but the cost is local: the
     // optimiser runs hundreds of times to grade a league's worth of swaps. The draft
     // tab's report card is the same trade-off — a league's worth of lineups.
@@ -9738,6 +10709,8 @@ document.addEventListener('click', function (event) {
     renderScores(true);
   } else if (target.id === 'refreshmatch') {
     renderMatchup(true);
+  } else if (target.id === 'refreshreport') {
+    renderReport(true);
   } else if (target.id === 'matchpasteload') {
     var pasted = document.getElementById('matchpastejson').value.replace(/^\s+|\s+$/g, '');
     if (!pasted) setMatchPasteStatus('Nothing pasted yet.', 'warn');
@@ -9820,6 +10793,7 @@ var ON_CHANGE = {
   pastefile: readLeagueFile,
   scoreweek: function () { renderScores(true); },
   matchweek: function () { matchState.pickedByUser = true; renderMatchup(true); },
+  reportweek: function () { reportState.pickedByUser = true; renderReport(false); },
   matchpastefile: readMatchupFile,
   tradepartner: function (v) {
     tradeState.partner = v === '' ? null : +v;
