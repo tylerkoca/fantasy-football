@@ -1513,12 +1513,35 @@ function copy(source) {
   return out;
 }
 
+/* THE WEEK THIS PAGE IS ABOUT, and for a whole September it was week 1.
+   `DATA.weeks[0]` is the first week the build emits, which is the first week of the
+   SEASON and not the first week ahead — so from the Tuesday after kickoff every
+   opponent, spread, forecast and bye on the page belonged to a week already played,
+   and nothing errored because week 1 is a perfectly valid week to ask about.
+   It also quietly mis-scoped two horizons: `remainingWeeks()` and `horizonWeeks()`
+   both count from `state.week`, so "rest of season" on Trades, Waivers and the report
+   card was still charging weeks that were over.
+   The build derives it from the schedule and emits it. The fallback is the old
+   behaviour, for a data file emitted before this field existed. */
+function openingWeek() {
+  var wanted = DATA.current_week, all = DATA.weeks;
+  for (var i = 0; i < all.length; i++) if (String(all[i]) === String(wanted)) return all[i];
+  return all[0];
+}
+
+/* Is this week over? Everything that decomposes a projection has to ask, because a
+   played week was projected from the history that existed BEFORE it and the emitted
+   driver table describes the weeks ahead. See build.py's history_before. */
+function weekPlayed(week) {
+  return DATA.current_week !== undefined && +week < +DATA.current_week;
+}
+
 function defaults() {
   var perStat = copy(BASE);
   perStat.rec = 1;
   for (var u = 0; u < UNPROJECTABLE.length; u++) perStat[UNPROJECTABLE[u]] = 0;
   return {
-    week: String(DATA.weeks[0]),
+    week: String(openingWeek()),
     format: 'full_ppr',
     config: { name: 'Full PPR', per_stat: perStat, bonuses: [], dst_points_allowed: DST_TIERS },
     slots: copy(DEFAULT_SLOTS),
@@ -1621,6 +1644,14 @@ function load() {
   /* The old single-league field is not kept in parallel. Two copies of the same league
      is exactly the shape that lets them drift, and only one of them can be right. */
   if ('league' in parsed) delete parsed.league;
+  /* A SAVED WEEK THAT IS NOW IN THE PAST IS NOT A CHOICE, IT IS A LEFTOVER.
+     `state.week` persists, so fixing the default alone would have fixed the page for
+     new visitors and left everyone who had ever opened it stuck on whatever week they
+     last looked at — which, for anyone who visited in August, is week 1 forever. A week
+     still AHEAD survives untouched: looking at week 9 in week 6 is a deliberate
+     look-ahead, and overwriting that would be the opposite bug. Same rule the Fantasy
+     Scores picker follows — the page opens on the week ahead, and a choice wins. */
+  if (weekPlayed(parsed.week)) parsed.week = String(openingWeek());
   return parsed;
 }
 
@@ -2832,6 +2863,10 @@ function schemeWeekLine(entry) {
 function weekReasonCell(entry) {
   var w = entry.week, p = entry.player;
   if (w.is_bye) return '<span class="tag warn">bye week</span>';
+  /* Same reason the panel declines: these are the panel's numbers, and for a played
+     week the table they are built from is not the one that week was projected with.
+     The column is about a decision, and the decision is gone. */
+  if (weekPlayed(state.week)) return '<span class="slot">played</span>';
 
   var scheme = schemeWeekLine(entry);
   var adj = w.adjustments;
@@ -3570,6 +3605,26 @@ function renderWhy() {
   var player = chosen.player;
   var drivers = player.drivers;
   var week = chosen.week || {};
+
+  /* THE PANEL IS AN ACCOUNT, AND IT CANNOT BE ONE FOR A WEEK ALREADY PLAYED.
+     Its whole claim is that the parts add up to the projection with nothing left over.
+     A played week is projected from the games played BEFORE it — that is what makes
+     the Weekly Report's "beat his 12.0" an honest comparison — while the driver table
+     that ships with a player describes the weeks AHEAD, which all share one history.
+     Decomposing one against the other would print a column of numbers that add up to
+     something else, which is the failure mode this panel exists to rule out. So it
+     declines and says which week it can answer for. */
+  if (weekPlayed(state.week)) {
+    host.innerHTML = '<div class="empty">Week ' + esc(state.week)
+      + ' has been played.</div>';
+    note.innerHTML = '<b>This breakdown is about the week ahead.</b> A week that has '
+      + 'already happened is projected here from the games played <i>before</i> it, so '
+      + 'that the Weekly Report can say whether he beat his number without the number '
+      + 'having seen the answer. That makes its parts different from these, and adding '
+      + 'up this table against that projection would not come to the right total. '
+      + 'Pick week ' + esc(String(openingWeek())) + ' or later.';
+    return;
+  }
 
   if (!drivers) {
     host.innerHTML = '<div class="empty">No breakdown for ' + esc(player.name)
