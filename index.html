@@ -410,6 +410,18 @@
   }
   button.primary:hover { filter: brightness(1.1); }
   button.link { background: none; border: none; color: var(--accent); padding: 0; }
+  /* Start / bench calls on Start / Sit: small enough to sit beside a name in a table. */
+  button.lockbtn {
+    font-size: 11px; padding: 1px 8px; margin-left: 6px; border-radius: 20px;
+    vertical-align: middle; color: var(--dim);
+  }
+  button.lockbtn:hover { color: var(--text); border-color: var(--accent); }
+  .setdiff { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+             gap: 6px 18px; margin: 8px 0; }
+  .setdiff h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .6px;
+                color: var(--dim); margin: 0 0 4px; }
+  .setdiff div.row-pt { display: flex; justify-content: space-between; gap: 10px;
+                        padding: 3px 0; border-bottom: 1px solid var(--line-soft); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
   table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
   th, td { text-align: right; padding: 6px 9px; border-bottom: 1px solid var(--line-soft); }
@@ -905,12 +917,17 @@
 
   <section class="view" id="view-startsit">
     <div class="card">
-      <h2>Optimal lineup</h2>
+      <h2 id="lineuphead">Optimal lineup</h2>
       <div id="lineup"></div>
     </div>
     <div class="card">
       <h2>Bench</h2>
       <div id="bench"></div>
+    </div>
+    <div class="card">
+      <h2>The lineup you set
+        <span class="tag">from your league</span></h2>
+      <div id="setLineup"></div>
     </div>
     <div class="card">
       <h2>Byes ahead
@@ -1549,7 +1566,9 @@ function defaults() {
     // Imported leagues live in local state, not in the data file: they are per person
     // and per league, and two people opening the same page have different ones.
     // `leagueTeam` is the index of whichever team is yours in the ACTIVE league.
-    leagueTeam: undefined
+    leagueTeam: undefined,
+    // Your own start/bench calls, by league scope then week. See lockedLineup.
+    locks: {}
   };
 }
 
@@ -1652,6 +1671,17 @@ function load() {
      look-ahead, and overwriting that would be the opposite bug. Same rule the Fantasy
      Scores picker follows — the page opens on the week ahead, and a choice wins. */
   if (weekPlayed(parsed.week)) parsed.week = String(openingWeek());
+  /* Locks for a played week are still read by the Weekly Report, so they are kept for
+     three weeks and then let go — beyond that they are only bytes in someone's browser. */
+  for (var scope in parsed.locks) {
+    if (!Object.prototype.hasOwnProperty.call(parsed.locks, scope)) continue;
+    for (var wk in parsed.locks[scope]) {
+      if (Object.prototype.hasOwnProperty.call(parsed.locks[scope], wk)
+          && DATA.current_week !== undefined && +wk < +DATA.current_week - 3) {
+        delete parsed.locks[scope][wk];
+      }
+    }
+  }
   return parsed;
 }
 
@@ -1745,7 +1775,14 @@ function eligible(slot, position) {
   return slot === position;
 }
 
-function optimize(entries) {
+/* `force` is an optional map of gsis id -> true: players the manager has said START,
+   whatever the projections think. It adds a weight to the matching only, never to the
+   total, so the points reported are still the real ones. Only Start / Sit and the
+   Weekly Report pass it — waivers, trades and byes must keep grading against the
+   true optimum, or a lock you set for one Sunday would quietly rewrite a trade grade. */
+var LOCK_BONUS = 10000;
+
+function optimize(entries, force) {
   var slots = slotList();
   if (!slots.length || !entries.length) return { lineup: [], bench: entries, total: 0 };
   var n = slots.length, m = entries.length;
@@ -1758,7 +1795,8 @@ function optimize(entries) {
          the lineup, the waiver gains and the trade grades all agree by construction. */
       var ok = i < n && j < m && eligible(slots[i], entries[j].position)
                && !entries[j].week.is_bye && !unavailable(entries[j].player);
-      row.push(ok ? -entries[j].points : 0);
+      row.push(ok ? -(entries[j].points
+                      + (force && force[entries[j].player.gsis_id] ? LOCK_BONUS : 0)) : 0);
     }
     cost.push(row);
   }
@@ -1778,6 +1816,231 @@ function optimize(entries) {
   for (i = 0; i < lineup.length; i++) if (lineup[i].entry) total += lineup[i].entry.points;
   bench.sort(function (a, b) { return b.points - a.points; });
   return { lineup: lineup, bench: bench, total: total };
+}
+
+/* ---- your own calls: start / bench locks ----------------------------------
+
+   The optimal lineup is a recommendation, and a manager who benches a fading tight end
+   on a hunch is entitled to have the page show the lineup he actually means to play.
+   Locks are kept per league and per week — a lock is a decision about one Sunday, and
+   carrying it into the next would be the page remembering an opinion you no longer
+   hold. Scoped by league because two leagues are two different rosters. */
+function lockScope() { return LEAGUE ? leagueKey(LEAGUE) : '_'; }
+
+function weekLocks(week) {
+  var scope = (state.locks || {})[lockScope()];
+  return (scope && scope[week]) || {};
+}
+
+function hasLocks(week) {
+  var locks = weekLocks(week);
+  for (var id in locks) if (Object.prototype.hasOwnProperty.call(locks, id)) return true;
+  return false;
+}
+
+function setLock(week, id, value) {
+  state.locks = state.locks || {};
+  var scope = state.locks[lockScope()] = state.locks[lockScope()] || {};
+  var locks = scope[week] = scope[week] || {};
+  if (value) locks[id] = value;
+  else delete locks[id];
+  if (!hasLocks(week)) delete scope[week];
+}
+
+/* A lock control for one row: what you have said about him this week, or the button
+   that says it. A man on bye or IR gets no START button, because the optimiser could
+   not honour it and a button that does nothing is worse than none. */
+function lockControl(entry, locks, starting) {
+  var id = esc(entry.player.gsis_id), lock = locks[entry.player.gsis_id];
+  if (lock) {
+    return ' <span class="tag">you ' + (lock === 'in' ? 'start' : 'bench') + ' him</span>'
+      + '<button class="lockbtn" data-lock="clear" data-lockid="' + id + '">undo</button>';
+  }
+  if (starting) {
+    return '<button class="lockbtn" data-lock="out" data-lockid="' + id + '" '
+      + 'title="Bench him this week; the next best fills his slot">bench</button>';
+  }
+  if (entry.week.is_bye || unavailable(entry.player)) return '';
+  return '<button class="lockbtn" data-lock="in" data-lockid="' + id + '" '
+    + 'title="Start him this week; the lineup is rebuilt around him">start</button>';
+}
+
+/* Which side of a matchup payload is yours, and who you are playing. */
+function mySide(data) {
+  var mine = myTeamId(), out = { side: null, other: null }, i, j;
+  if (!data || mine === null) return out;
+  for (i = 0; i < (data.matchups || []).length; i++) {
+    var sides = data.matchups[i].sides || [];
+    for (j = 0; j < sides.length; j++) {
+      if (sides[j].teamId === mine) { out.side = sides[j]; out.other = sides[1 - j] || null; }
+    }
+  }
+  return out;
+}
+
+/* THE NEWEST LINEUP THE PAGE HOLDS FOR A WEEK, wherever it came from. Three places can
+   hold one — the Weekly Report's cache, the Fantasy Scores tab's live read, and a stored
+   paste — and they are filled at different times. Reading only the first is how a
+   lineup changed and re-pasted went on showing the old one; the newest wins. */
+function freshestLineup(week) {
+  if (!LEAGUE) return null;
+  var key = leagueKey(LEAGUE) + '|' + week, pick = null;
+  var found = [reportState.lineups[key], matchState.key === key ? matchState.data : null,
+               storedPaste(week)];
+  for (var i = 0; i < found.length; i++) {
+    if (found[i] && (!pick || (found[i].fetchedAt || 0) > (pick.fetchedAt || 0))) pick = found[i];
+  }
+  return pick;
+}
+
+function whenText(ms) {
+  if (!ms) return '';
+  var age = (Date.now() - ms) / 60000;
+  if (age < 2) return 'just now';
+  if (age < 90) return Math.round(age) + ' minutes ago';
+  var d = new Date(ms), days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var h = d.getHours(), m = d.getMinutes();
+  return days[d.getDay()] + ' ' + (h % 12 || 12) + ':' + (m < 10 ? '0' : '') + m
+    + (h < 12 ? ' am' : ' pm')
+    + (age > 60 * 24 * 6 ? ', ' + (d.getMonth() + 1) + '/' + d.getDate() : '');
+}
+
+/* THE LINEUP YOU ACTUALLY SET, BESIDE OURS. The optimal lineup above is a
+   recommendation; this card is the fact, read from the league and priced in OUR
+   projections so the two totals are the same currency. A paste is a snapshot, so its
+   age is printed — a lineup changed after pasting looks exactly like one that was not,
+   and the time is the only thing that tells them apart. */
+function renderSetLineup() {
+  var box = document.getElementById('setLineup');
+  if (!LEAGUE || !LEAGUE.teams || !LEAGUE.teams.length || myTeamId() === null) {
+    box.innerHTML = '<div class="empty">Import your league and pick your team on the '
+      + 'Roster tab, and the lineup you set there is compared with ours here.</div>';
+    return;
+  }
+  var week = String(state.week), key = leagueKey(LEAGUE) + '|' + week;
+  var data = freshestLineup(week);
+  if (!data && !Object.prototype.hasOwnProperty.call(reportState.lineups, key)) {
+    box.innerHTML = '<div class="empty">Reading your lineup…</div>';
+    reportFetchLineup(week).then(function () {
+      if (String(state.week) === week && currentView === 'startsit') renderSetLineup();
+    });
+    return;
+  }
+  var side = mySide(data).side;
+  if (!side || !side.starters.length) {
+    box.innerHTML = '<div class="empty">' + (LEAGUE.platform === 'espn'
+      ? 'Your ESPN lineup for week ' + esc(week) + ' could not be read. A private league has '
+        + 'to be pasted: open the <b>Fantasy Scores</b> tab, pick week ' + esc(week)
+        + ', and use the paste box there.'
+      : 'Your league has no lineup for week ' + esc(week) + ' yet.') + '</div>';
+    return;
+  }
+
+  var best = optimize(rosterEntries()), ours = {}, theirs = {}, i;
+  for (i = 0; i < best.lineup.length; i++) {
+    if (best.lineup[i].entry) ours[best.lineup[i].entry.player.gsis_id] = best.lineup[i].entry;
+  }
+  var setTotal = 0, unknown = 0, offRoster = 0, youStart = [], weStart = [];
+  for (i = 0; i < side.starters.length; i++) {
+    var st = side.starters[i];
+    if (!st.pid) { if (!st.empty && st.name) unknown++; continue; }
+    theirs[st.pid] = true;
+    if (state.roster.indexOf(st.pid) < 0) offRoster++;
+    var p = BY_ID[st.pid], e = p ? entryFor(p, week) : null;
+    if (!e) { unknown++; continue; }
+    setTotal += cannotPlay(e) ? 0 : e.points;
+    if (!ours[st.pid]) youStart.push(e);
+  }
+  for (var id in ours) {
+    if (Object.prototype.hasOwnProperty.call(ours, id) && !theirs[id]) weStart.push(ours[id]);
+  }
+  var platform = LEAGUE.platform === 'sleeper' ? 'Sleeper' : 'ESPN';
+  var html = '';
+  if (!youStart.length && !weStart.length) {
+    html += '<p>Your ' + platform + ' lineup is the same as our optimal one.</p>';
+  } else {
+    var gap = best.total - setTotal;
+    html += '<p>By our projections your lineup scores <b>' + setTotal.toFixed(1) + '</b> against '
+      + best.total.toFixed(1) + ' for the optimal one'
+      + (gap > 0.05 ? ' — <b>' + gap.toFixed(1) + '</b> short.' : '.') + '</p>'
+      + '<div class="setdiff"><div><h3>You start</h3>' + setDiffList(youStart) + '</div>'
+      + '<div><h3>We would start instead</h3>' + setDiffList(weStart) + '</div></div>';
+  }
+  var note = data.source === 'espn-paste'
+    ? 'Pasted ' + whenText(data.fetchedAt) + '. A paste is a snapshot: if you have changed '
+      + 'your lineup since, paste again on the Fantasy Scores tab.'
+    : 'Read from ' + platform + ' ' + whenText(data.fetchedAt) + '.';
+  if (offRoster) {
+    note += ' ' + offRoster + ' of these starters ' + (offRoster === 1 ? 'is' : 'are')
+      + ' not on your roster here — re-import on the Roster tab to pick up the move.';
+  }
+  if (unknown) {
+    note += ' ' + unknown + ' starter' + (unknown === 1 ? ' is' : 's are')
+      + ' not in this build, so not priced.';
+  }
+  html += '<div class="note">' + note + ' <button class="lockbtn" data-lock="adopt">'
+    + 'Use this as my lineup</button></div>';
+  box.innerHTML = html;
+}
+
+/* The same test `optimize` applies: a starter on bye or ruled out scores nothing,
+   whatever his projection says, so the set lineup is priced the way it will score. */
+function cannotPlay(entry) { return !!(entry.week.is_bye || unavailable(entry.player)); }
+
+function setDiffList(rows) {
+  if (!rows.length) return '<div class="row-pt"><span>—</span></div>';
+  var out = '';
+  for (var r = 0; r < rows.length; r++) {
+    /* A starter who cannot play is the one thing on this card worth shouting about:
+       it is a zero you can still fix before kickoff. */
+    var flag = rows[r].week.is_bye ? ' <span class="tag bad">bye</span>'
+      : unavailable(rows[r].player) ? ' <span class="tag bad">out</span>' : '';
+    out += '<div class="row-pt"><span>' + chip(rows[r].player.position)
+      + esc(rows[r].player.name) + flag + '</span><b>'
+      + (cannotPlay(rows[r]) ? 0 : rows[r].points).toFixed(1) + '</b></div>';
+  }
+  return out;
+}
+
+/* "Use this as my lineup": every starter you set becomes a START lock, after clearing
+   this week's earlier calls. The optimiser then puts each one in a slot he fits, which
+   reproduces the lineup you set whenever your roster here is current. */
+function adoptSetLineup() {
+  var week = String(state.week), side = mySide(freshestLineup(week)).side;
+  if (!side) return;
+  var scope = (state.locks || {})[lockScope()];
+  if (scope) delete scope[week];
+  for (var i = 0; i < side.starters.length; i++) {
+    var pid = side.starters[i].pid;
+    if (pid && state.roster.indexOf(pid) >= 0) setLock(week, pid, 'in');
+  }
+}
+
+/* The lineup with your locks applied: benched players leave the pool, started ones are
+   forced in, and the optimiser fills everything else around them. A start lock it
+   cannot honour — three quarterbacks for one slot, or a man on bye — is returned in
+   `unplaced` so the page can say so rather than drop it without a word. */
+function lockedLineup(entries, week) {
+  var locks = weekLocks(week), pool = [], out = [], force = {}, i;
+  for (i = 0; i < entries.length; i++) {
+    var lock = locks[entries[i].player.gsis_id];
+    if (lock === 'out') out.push(entries[i]);
+    else pool.push(entries[i]);
+    if (lock === 'in') force[entries[i].player.gsis_id] = true;
+  }
+  var plan = optimize(pool, force), placed = {};
+  for (i = 0; i < plan.lineup.length; i++) {
+    if (plan.lineup[i].entry) placed[plan.lineup[i].entry.player.gsis_id] = true;
+  }
+  var unplaced = [];
+  for (i = 0; i < pool.length; i++) {
+    if (force[pool[i].player.gsis_id] && !placed[pool[i].player.gsis_id]) unplaced.push(pool[i]);
+  }
+  plan.bench = plan.bench.concat(out);
+  plan.bench.sort(function (a, b) { return b.points - a.points; });
+  plan.unplaced = unplaced;
+  plan.locks = locks;
+  return plan;
 }
 
 /* ------------------------------------------------------------------ *
@@ -2647,7 +2910,8 @@ function playerRow(entry, options) {
     + (options.rank !== undefined ? rankCell(options.rank) : '')
     + '<td class="l who"' + teamStyle(p.team) + '>'
       + (options.lead ? '<span class="slotname">' + options.lead + '</span>' : '')
-      + avatar(p) + chip(p.position) + esc(p.name) + flags(entry) + '</td>'
+      + avatar(p) + chip(p.position) + esc(p.name) + flags(entry)
+      + (options.after || '') + '</td>'
     + '<td class="l">' + teamBadge(p.team) + ' <span class="slot">' + matchup + '</span>'
       + versusCell(entry) + '</td>'
     + '<td class="l">' + usageCell(entry) + '</td>'
@@ -3139,12 +3403,16 @@ function renderStartSit() {
     // Still render the cards below, which have their own empty states. Returning here
     // without them left bare labels and an empty dropdown sitting under two explained
     // cards — the one thing on the page that looked broken rather than unfilled.
+    renderSetLineup();
     renderByes();
     renderScheme();
     renderWhy();
     return;
   }
-  var result = optimize(entries);
+  var result = lockedLineup(entries, state.week);
+  var best = optimize(entries);
+  var mine = hasLocks(state.week);
+  document.getElementById('lineuphead').textContent = mine ? 'Your lineup' : 'Optimal lineup';
   setBandScale(entries);
   var html = squadStrip(result.lineup);
   html += '<div class="scroll"><table>' + TABLE_HEAD + '<tbody>';
@@ -3156,9 +3424,28 @@ function renderStartSit() {
         + '<td colspan="8"></td></tr>';
       continue;
     }
-    html += playerRow(row.entry, { lead: row.slot, cls: 'filled' });
+    html += playerRow(row.entry, { lead: row.slot, cls: 'filled',
+                                   after: lockControl(row.entry, result.locks, true) });
   }
   html += '</tbody></table></div>';
+  /* Your calls are priced, not just obeyed: the cost against the optimal lineup is the
+     whole of what a lock tells you, and it is in the same projected points as the rest. */
+  if (mine) {
+    var cost = best.total - result.total;
+    html += '<div class="note">Your start/bench calls are applied. '
+      + (cost > 0.05
+          ? 'By our projections they cost <b>' + cost.toFixed(1) + '</b> points against the '
+            + 'optimal lineup (' + best.total.toFixed(1) + ').'
+          : 'They match the optimal lineup, so they cost nothing by our projections.')
+      + ' <button class="lockbtn" data-lock="reset">Clear my calls</button></div>';
+  }
+  if (result.unplaced.length) {
+    var names = [];
+    for (var u = 0; u < result.unplaced.length; u++) names.push(esc(result.unplaced[u].player.name));
+    html += '<div class="note"><span class="tag warn">not placed</span> Could not start '
+      + names.join(', ') + ' — no open slot '
+      + 'he is eligible for, or he is out or on bye this week.</div>';
+  }
 
   var par = benchmarkLineup(state.week);
   var gap = par ? result.total - par : 0;
@@ -3179,9 +3466,12 @@ function renderStartSit() {
     benchBox.innerHTML = '<div class="empty">Nobody benched.</div>';
   } else {
     var bench = '<div class="scroll"><table>' + TABLE_HEAD + '<tbody class="bench">';
-    for (var b = 0; b < result.bench.length; b++) bench += playerRow(result.bench[b]);
+    for (var b = 0; b < result.bench.length; b++) {
+      bench += playerRow(result.bench[b], { after: lockControl(result.bench[b], result.locks, false) });
+    }
     benchBox.innerHTML = bench + '</tbody></table></div>';
   }
+  renderSetLineup();
   renderByes();
   renderScheme();
   renderWhy();
@@ -4817,11 +5107,42 @@ var SLEEPER_STATS = 'https://api.sleeper.app/v1/stats/nfl/regular/';
 
    Kickers and defences are the exception: their stats are in the feed under different
    names (fgm_40_49 rather than fg_made_40_49), so scoring them with our config would
-   silently return zero for a kicker who kicked four field goals. Those positions are
-   badged instead. A wrong number is worse than a missing one. */
-var LIVE_SCORABLE = { QB: 1, RB: 1, WR: 1, TE: 1 };
+   silently return zero for a kicker who kicked four field goals. A wrong number is worse
+   than a missing one.
 
-var live = { stats: null, statsWeek: null, statsPending: false };
+   KICKERS ARE TRANSLATED, and the translation is checked: every kicker line in weeks 1-3
+   of 2026 (66 of them) scores under our standard config to exactly Sleeper's own
+   pts_std. Two traps in it. `fgm_50p` is the SUM of `fgm_50_59` and `fgm_60p`, so only
+   the fine buckets are read — reading all three scores a 55-yarder twice. And `fgmiss`
+   already counts a blocked kick (Trey Smack, week 3: fga 1, fgmiss 1, fg_blkd 1), so
+   `fg_blkd` is not read either. Without this a private ESPN league's kicker sat at his
+   pasted number all week, which is zero for anyone pasted before Thursday night.
+
+   DEFENCES STAY BADGED. Mapped the same way they reconcile with Sleeper on only 25 of
+   65 lines; all 65 reconcile once forced fumbles, blocked kicks and special-teams
+   recoveries are added, and the contract carries none of those — nor ESPN's
+   yards-allowed ladder. A live defence number would disagree with the league's. */
+var LIVE_SCORABLE = { QB: 1, RB: 1, WR: 1, TE: 1 };
+var SLEEPER_LIVE_KICKING = {
+  fgm_0_19: 'fg_made_0_19', fgm_20_29: 'fg_made_20_29', fgm_30_39: 'fg_made_30_39',
+  fgm_40_49: 'fg_made_40_49', fgm_50_59: 'fg_made_50_59', fgm_60p: 'fg_made_60_',
+  fgmiss: 'fg_missed', xpm: 'pat_made', xpmiss: 'pat_missed'
+};
+
+/* A Sleeper line in our vocabulary, or null for a position the feed cannot score. */
+function liveLine(position, raw) {
+  if (LIVE_SCORABLE[position]) return raw;
+  if (position !== 'K') return null;
+  var out = {};
+  for (var k in SLEEPER_LIVE_KICKING) {
+    if (Object.prototype.hasOwnProperty.call(SLEEPER_LIVE_KICKING, k) && raw[k]) {
+      out[SLEEPER_LIVE_KICKING[k]] = raw[k];
+    }
+  }
+  return out;
+}
+
+var live = { byWeek: {}, waiting: {} };
 /* Which tab is open. UI state, so deliberately not persisted with the roster. */
 var currentView = 'startsit';
 
@@ -5036,30 +5357,44 @@ function scheduleScoreRefresh(anyLive) {
 
 /* `force` refetches a week already held. Start / Sit is happy with one read, but the
    Fantasy Scores tab rescores a pasted ESPN league from this feed every minute of a live
-   Sunday, and a cache that never expires would freeze it at the first read. */
+   Sunday, and a cache that never expires would freeze it at the first read.
+
+   HELD PER WEEK, because two tabs read this feed for DIFFERENT weeks. It used to be one
+   slot: Start / Sit filled it with its own week — often the week ahead — and Fantasy
+   Scores then repainted this week's matchup against that week's lines, found no line for
+   a player who had already played, and silently fell back to his pasted number. A
+   request for a week already in flight used to be dropped outright, callback and all;
+   it now waits for that fetch and is called back with it. A failed read is held as null,
+   so the status line can say the feed could not be reached. */
 function loadLiveStats(week, done, force) {
-  if (!force && live.statsWeek === week && live.stats) { done(); return; }
-  if (live.statsPending) return;
-  live.statsPending = true;
+  week = String(week);
+  if (!force && live.byWeek[week]) { done(); return; }
+  if (live.waiting[week]) { live.waiting[week].push(done); return; }
+  live.waiting[week] = [done];
   fetchJson(SLEEPER_STATS + DATA.season + '/' + week).then(function (payload) {
-    live.stats = payload || {};
-    live.statsWeek = week;
+    live.byWeek[week] = payload || {};
   }).catch(function () {
-    live.stats = null;
+    live.byWeek[week] = null;
   }).then(function () {
-    live.statsPending = false;
-    done();
+    var calls = live.waiting[week];
+    delete live.waiting[week];
+    for (var i = 0; i < calls.length; i++) calls[i]();
   });
 }
 
-/* Actual points so far this week, in YOUR scoring settings. Returns null when we
-   cannot say — no line yet, or a position whose stats this feed does not carry. */
-function liveFor(player) {
-  if (!live.stats) return null;
-  var raw = live.stats[player.sleeper_id];
+function liveStats(week) { return live.byWeek[String(week)] || null; }
+
+/* Actual points in `week`, in YOUR scoring settings. Returns null when we cannot say —
+   no line yet, or that week's feed not read — and { unsupported } for a position whose
+   stats this feed does not carry. */
+function liveFor(player, week) {
+  var stats = liveStats(week);
+  if (!stats) return null;
+  var raw = stats[player.sleeper_id];
   if (!raw) return null;
-  if (!LIVE_SCORABLE[player.position]) return { unsupported: true };
-  return { points: score(raw), stats: raw };
+  var line = liveLine(player.position, raw);
+  if (!line) return { unsupported: true };
+  return { points: score(line), stats: raw };
 }
 
 /* ------------------------------------------------------------------ *
@@ -5433,8 +5768,8 @@ function fetchLeagueMatchups(league, week) {
 
 /* For each starter: the points he has, what he is projected for, where his game is,
    and a sampler for what is still to come. `rescore` is the private-ESPN case, where
-   the pasted points are refreshed from Sleeper's live stat feed for the four positions
-   that feed can score. */
+   the pasted points are refreshed from Sleeper's live stat feed for every position
+   that feed can score — all but defences. */
 function sideModel(side, data, clocks) {
   var week = data.week, rescore = data.source === 'espn-paste';
   var rows = [], parts = [], shown = 0, counts = { pre: 0, live: 0, done: 0 };
@@ -5460,8 +5795,8 @@ function sideModel(side, data, clocks) {
     else if (row.state === 'post') counts.done++;
     else counts.pre++;
 
-    if (rescore && LIVE_SCORABLE[p.position]) {
-      var lv = liveFor(p);
+    if (rescore) {
+      var lv = liveFor(p, week);    // a defence comes back unsupported and keeps the paste
       if (lv && typeof lv.points === 'number') {
         if (row.state === 'post' && s.points) { gap += lv.points - s.points; gapN++; }
         row.points = lv.points;
@@ -5763,10 +6098,10 @@ function matchMethodNote(data) {
     + 'leaning on the wrong numbers.';
   if (data && data.source === 'espn-paste') {
     note += ' This league is private ESPN, so its lineups and official points come from '
-      + 'your last paste. Since then QB/RB/WR/TE are rescored live from Sleeper’s stat '
-      + 'feed under your Settings scoring; kickers and defences stay at the pasted number '
-      + 'until you paste again, because that feed names their stats differently and a '
-      + 'wrong zero is worse than a stale number.';
+      + 'your last paste. Since then QB/RB/WR/TE and kickers are rescored live from '
+      + 'Sleeper’s stat feed under your Settings scoring; defences stay at the pasted '
+      + 'number until you paste again, because their points depend on rules that feed '
+      + 'cannot be matched to — forced fumbles, blocked kicks, yards allowed.';
   }
   note += ' ESPN’s own win percentage is shown beside ours where the league is on ESPN. '
     + 'Nothing on this tab feeds a projection, a ranking or a lineup.';
@@ -5824,7 +6159,7 @@ function renderMatchupPasteHelp(week, show) {
     + '<br><b>2.</b> Select all and paste below, <b>or</b> press Ctrl+S and load the saved '
     + 'file — more reliable, and the only option on a phone.'
     + '<br><b>3.</b> Paste again whenever you want ESPN’s official numbers. In between, '
-    + 'QB/RB/WR/TE update by themselves.';
+    + 'QB/RB/WR/TE and kickers update by themselves.';
 }
 
 /* `auto` marks the minute-by-minute refresh. For a private ESPN league it skips the
@@ -5888,7 +6223,7 @@ function renderMatchup(force, auto) {
           if (matchState.key !== key) return;
           /* loadLiveStats calls back on failure too, with the feed emptied — so the line
              must check, or it announces live stats that never arrived. */
-          status.textContent = live.stats
+          status.textContent = liveStats(week)
             ? 'Live stats ' + new Date().toLocaleTimeString()
               + ' · official points as of your paste'
             : 'Sleeper’s live stat feed could not be reached — showing your paste as it was';
@@ -6004,6 +6339,9 @@ function adoptMatchupJson(text) {
      and a season of them is not worth keeping in someone's browser. */
   LEAGUE.matchups = LEAGUE.matchups || {};
   LEAGUE.matchups[week] = data;
+  /* The Weekly Report and Start / Sit cache lineups per week; without this a fresh
+     paste reached neither until a reload, and both went on showing the old one. */
+  reportState.lineups[leagueKey(LEAGUE) + '|' + week] = data;
   var weeks = [];
   for (var k in LEAGUE.matchups) {
     if (Object.prototype.hasOwnProperty.call(LEAGUE.matchups, k)) weeks.push(+k);
@@ -6407,7 +6745,7 @@ function renderRoster() {
     /* Actual points so far, beside the projection. Both numbers are scored with YOUR
        settings, so the comparison is like for like — and the actual is only shown when
        there is a real stat line behind it. */
-    var actual = liveFor(it.player);
+    var actual = liveFor(it.player, state.week);
     var actualCell = '';
     if (actual && actual.unsupported) {
       actualCell = '<span class="tag">live n/a</span> ';
@@ -6437,9 +6775,9 @@ function renderRoster() {
       note.innerHTML = '<b>' + liveTotal.toFixed(1) + ' actual points</b> from '
         + liveSeen + ' of your ' + state.roster.length + ' players in week '
         + state.week + ', scored with your own settings — the same scoring the '
-        + 'projection beside it uses. Kickers and defences show <i>live n/a</i>: their '
-        + 'stats are not in this feed under the names our scoring uses, and a wrong '
-        + 'zero would be worse than an honest gap.';
+        + 'projection beside it uses. Defences show <i>live n/a</i>: their points depend '
+        + 'on rules this feed cannot be matched to, and a wrong number would be worse '
+        + 'than an honest gap.';
     } else {
       note.innerHTML = 'No actual stats for week ' + state.week + ' yet. This fills in '
         + 'once games are played — it is fetched live rather than coming from the '
@@ -6448,9 +6786,11 @@ function renderRoster() {
   }
 
   // Fetch once per week, then repaint. Guarded so it cannot loop.
-  if (state.roster.length && live.statsWeek !== state.week && !live.statsPending) {
-    loadLiveStats(state.week, function () {
-      if (live.statsWeek === state.week) renderRoster();
+  var held = Object.prototype.hasOwnProperty.call(live.byWeek, String(state.week));
+  if (state.roster.length && !held && !live.waiting[String(state.week)]) {
+    var asked = state.week;
+    loadLiveStats(asked, function () {
+      if (String(state.week) === String(asked) && liveStats(asked)) renderRoster();
     });
   }
 }
@@ -6713,6 +7053,10 @@ function reportFacts(player, week, ctx) {
     f.points = rec ? rec.points : score(raw);
     f.rank = rec ? rec.rank : null;
   }
+  /* A kicker's feed score is kept apart from f.points, which the summary tile adds up
+     as QB/RB/WR/TE. The card prefers it to a PASTED number, which is only as fresh as
+     the paste — a Thursday kicker pasted on Wednesday reads zero all weekend. */
+  f.kick = pos === 'K' && f.played ? score(liveLine('K', raw)) : null;
   f.snapPct = f.teamSnaps ? f.snaps / f.teamSnaps : null;
 
   var i, other;
@@ -7061,12 +7405,17 @@ function reportCard(f, slot, ctx) {
   var matchup = f.bye ? 'Bye' : (f.opponent ? (f.home ? 'vs ' : '@ ') + esc(f.opponent) : '');
   var pts = f.points !== null ? f.points : (typeof f.official === 'number' ? f.official : null);
   var sub = [];
+  var kicked = f.kick !== null && (ctx.pasted || typeof f.official !== 'number');
+  if (kicked) {
+    pts = f.kick;
+    sub.push('live, your Settings scoring');
+  }
   if (f.proj !== null && !f.bye) sub.push('proj ' + f.proj.toFixed(1));
   if (typeof f.official === 'number' && f.points !== null && Math.abs(f.official - f.points) >= 0.5) {
     sub.push('league ' + f.official.toFixed(2));
   }
-  if (f.points === null && typeof f.official === 'number') sub.push('league scoring');
-  if (f.points === null && typeof f.official !== 'number' && f.played) sub.push('points need your league');
+  if (!kicked && f.points === null && typeof f.official === 'number') sub.push('league scoring');
+  if (!kicked && f.points === null && typeof f.official !== 'number' && f.played) sub.push('points need your league');
   var headline = reportHeadline(f, ctx), body = reportBody(f, ctx), stats = reportStats(f);
   var next = reportNext(p, ctx);
   return '<article class="rep"' + teamStyle(p.team) + '>'
@@ -7100,16 +7449,8 @@ function reportUnknownCard(starter) {
 /* The lineup the report treats as your starters: the one you set, when the platform can
    be read, and otherwise the Start / Sit lineup for that week — labelled as such. */
 function reportLineup(week) {
-  var data = LEAGUE ? reportState.lineups[leagueKey(LEAGUE) + '|' + week] : null;
-  var mine = myTeamId(), side = null, other = null, i, j;
-  if (data && mine !== null) {
-    for (i = 0; i < (data.matchups || []).length; i++) {
-      var sides = data.matchups[i].sides || [];
-      for (j = 0; j < sides.length; j++) {
-        if (sides[j].teamId === mine) { side = sides[j]; other = sides[1 - j] || null; }
-      }
-    }
-  }
+  var data = freshestLineup(week);
+  var found = mySide(data), side = found.side, other = found.other, i;
   var starters = [], ids = {}, official = {};
   if (side) {
     for (i = 0; i < side.starters.length; i++) {
@@ -7123,7 +7464,7 @@ function reportLineup(week) {
       var entry = BY_ID[state.roster[i]] ? entryFor(BY_ID[state.roster[i]], week) : null;
       if (entry) entries.push(entry);
     }
-    var plan = optimize(entries);
+    var plan = lockedLineup(entries, week);
     for (i = 0; i < plan.lineup.length; i++) {
       if (!plan.lineup[i].entry) continue;
       var pl = plan.lineup[i].entry.player;
@@ -7135,7 +7476,8 @@ function reportLineup(week) {
   for (i = 0; i < state.roster.length; i++) {
     if (!ids[state.roster[i]] && BY_ID[state.roster[i]]) bench.push(BY_ID[state.roster[i]]);
   }
-  return { starters: starters, bench: bench, side: side, other: other, official: official };
+  return { starters: starters, bench: bench, side: side, other: other, official: official,
+           pasted: !!side && data.source === 'espn-paste' };
 }
 
 function reportTile(label, value, caption) {
@@ -7225,7 +7567,7 @@ function paintReport(week) {
     if (String(DATA.weeks[i]) === String(+week + 1)) nextWeek = String(DATA.weeks[i]);
   }
   var ctx = { pool: pool, games: reportGames(reportState.boards[week]), official: lineup.official,
-              mvp: null, nextWeek: nextWeek, nextPlan: null };
+              pasted: lineup.pasted, mvp: null, nextWeek: nextWeek, nextPlan: null };
 
   if (LEAGUE && LEAGUE.teams) {
     var best = null;
@@ -7302,8 +7644,11 @@ function reportNote() {
     + 'team totals, so every share is a division of two published numbers. Points use the '
     + 'scoring on your Settings tab, the same as the projection beside them; where your '
     + 'platform’s official number differs by half a point or more, it is shown as '
-    + '<i>league</i>. Kickers and defences carry your platform’s points when your lineup '
-    + 'could be read, because the feed names their stats differently. The score and the '
+    + '<i>league</i>. Defences carry your platform’s points when your lineup could be '
+    + 'read, because their points depend on rules the feed cannot be matched to. Kickers '
+    + 'do too, except where the lineup is a pasted private-ESPN page — a paste is only as '
+    + 'fresh as the moment you took it, so a kicker who has played since is scored from '
+    + 'the feed instead, under your Settings scoring. The score and the '
     + 'result come from ESPN’s scoreboard. <i>Next week</i> compares his projection with '
     + 'your best lineup on the roster you have now. Nothing here feeds a projection, a '
     + 'ranking or a lineup.';
@@ -10696,6 +11041,18 @@ document.addEventListener('click', function (event) {
     var bucket = target.dataset.tradeside === 'out' ? tradeState.out : tradeState.into;
     bucket[target.dataset.tradeid] = target.checked;
     renderTradeVerdict();
+    return;
+  }
+  if (target.dataset.lock) {
+    var lockAct = target.dataset.lock;
+    if (lockAct === 'adopt') adoptSetLineup();
+    else if (lockAct === 'reset') {
+      var lockedScope = (state.locks || {})[lockScope()];
+      if (lockedScope) delete lockedScope[String(state.week)];
+    } else {
+      setLock(String(state.week), target.dataset.lockid, lockAct === 'clear' ? null : lockAct);
+    }
+    render();
     return;
   }
   if (target.dataset.add) {
