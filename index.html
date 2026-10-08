@@ -210,6 +210,7 @@
   .tab[data-view="draft"]    { --tabhue: #f08155; }
   .tab[data-view="matchup"]  { --tabhue: #e7c64a; }
   .tab[data-view="report"]   { --tabhue: #9ad26a; }
+  .tab[data-view="playoffs"] { --tabhue: #ef7b6b; }
   .tab[data-view="scores"]   { --tabhue: #c2477e; }
   .tab[data-view="roster"]   { --tabhue: #4fc9d8; }
   .tab[data-view="settings"] { --tabhue: #bcc4ce; }
@@ -246,6 +247,16 @@
   #view-scores   { --section: #b83d70; }
   #view-matchup  { --section: #b38a12; }
   #view-report   { --section: #4f8a25; }
+  #view-playoffs { --section: #c4483d; }
+
+  /* The playoff table. Your row is tinted, the cut is a dashed rule, and each chance
+     carries a bar whose length IS the percentage printed in it — the number is always
+     written, so the bar is reinforcement rather than the only carrier. */
+  table.playoffs tr.mine td { background: color-mix(in srgb, var(--section) 12%, transparent); }
+  table.playoffs tr.cut td { border-bottom: 2px dashed var(--section); }
+  td.pbar span { display: inline-block; min-width: 58px; padding: 1px 6px; border-radius: 4px;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--section) 30%, transparent)
+      var(--p), transparent var(--p)); }
 
   /* The weekly report. One card per player, edged in his team's colour — decoration,
      since the badge beside his name always carries the abbreviation. Usage sits in the
@@ -883,6 +894,7 @@
     <button class="tab" role="tab" data-view="startsit" aria-selected="true">Start / Sit</button>
     <button class="tab" role="tab" data-view="matchup" aria-selected="false">Fantasy Scores</button>
     <button class="tab" role="tab" data-view="report" aria-selected="false">Weekly Report</button>
+    <button class="tab" role="tab" data-view="playoffs" aria-selected="false">Playoffs</button>
     <button class="tab" role="tab" data-view="rankings" aria-selected="false">Rankings</button>
     <button class="tab" role="tab" data-view="waivers" aria-selected="false">Waivers</button>
     <button class="tab" role="tab" data-view="trade" aria-selected="false">Trades</button>
@@ -1313,6 +1325,28 @@
     <div class="card">
       <h2>How the report is written</h2>
       <div class="note" id="reportnote" style="margin-top:0"></div>
+    </div>
+  </section>
+
+  <!-- PLAYOFFS. Every team's chance of making it: the official record and schedule from
+       the platform, the games still to play decided by a measured blend of roster and
+       points per game, simulated to the end of the regular season. See renderPlayoffs. -->
+  <section class="view" id="view-playoffs" hidden>
+    <div class="card">
+      <h2>Playoff odds <span class="tag" id="playoffsource"></span></h2>
+      <div class="row" style="margin-bottom:10px; align-items:flex-end">
+        <div><button class="primary" id="refreshplayoffs">Refresh</button></div>
+        <div class="note" id="playoffstatus" style="margin:0"></div>
+      </div>
+      <div id="playofftable"></div>
+    </div>
+    <div class="card">
+      <h2>Your path</h2>
+      <div id="playoffpath"></div>
+    </div>
+    <div class="card">
+      <h2>Where the odds come from</h2>
+      <div class="note" id="playoffnote" style="margin-top:0"></div>
     </div>
   </section>
 
@@ -6375,6 +6409,10 @@ function adoptMatchupJson(text) {
   /* The Weekly Report and Start / Sit cache lineups per week; without this a fresh
      paste reached neither until a reload, and both went on showing the old one. */
   reportState.lineups[leagueKey(LEAGUE) + '|' + week] = data;
+  /* The same payload carries the standings and the whole season's schedule, which is
+     all the Playoffs tab needs — so a private league's paste serves that tab too. */
+  LEAGUE.season = espnSeason(payload, 'espn-paste');
+  if (currentView === 'playoffs') playoffState.key = null;
   var weeks = [];
   for (var k in LEAGUE.matchups) {
     if (Object.prototype.hasOwnProperty.call(LEAGUE.matchups, k)) weeks.push(+k);
@@ -6387,6 +6425,628 @@ function adoptMatchupJson(text) {
   setMatchPasteStatus('Loaded ' + data.matchups.length + ' matchups, ' + starters
     + ' starters.', 'good');
   renderMatchup(true);
+}
+
+/* ------------------------------------------------------------------ *
+ * PLAYOFFS — every team's chance of making it, from where the league stands.
+ *
+ * THE RECORD IS THE PLATFORM'S AND THE FORECAST IS MEASURED. Wins, losses and points
+ * for are the official ones, read from Sleeper's /rosters or ESPN's standings, and the
+ * remaining schedule is the league's own. What is ours is how the games still to come
+ * are decided: each team gets a level, and its weeks are drawn around it.
+ *
+ * The level blends two things, and the BLEND IS MEASURED, not chosen — playoffs.py
+ * fitted it on completed 2025 Sleeper leagues, forecast by forecast, from exactly what
+ * existed at each week:
+ *   * the roster: its best QB/RB/WR/TE lineup in each remaining week, from this
+ *     build's projections under the Settings scoring, byes and injuries included;
+ *   * points per game so far, the official number.
+ * Early on the roster carries nearly all of it; by mid-season points per game carries
+ * half or more — it knows the manager, and the roster does not. Dynasty leagues trust
+ * points per game far sooner than redraft ones, so each gets its own weights.
+ *
+ * A level is itself uncertain, so each simulated season draws one around the forecast
+ * and then draws every week around that. Leaving the first draw out treats the forecast
+ * as the truth and makes every percentage too sure of itself. `simulatePlayoffs`
+ * mirrors playoffs.simulate, which is what the calibration printed under the table was
+ * run on; edit the two together.
+ *
+ * Displayed only: nothing here reaches a projection, a ranking or a lineup.
+ * ------------------------------------------------------------------ */
+var PLAYOFFS = (DATA.facts && DATA.facts.playoffs) || {};
+var PLAYOFF_SIMS = 10000;
+var PLAYOFF_POSITIONS = { QB: 1, RB: 1, WR: 1, TE: 1 };
+var playoffState = { key: null, season: null };
+
+function playoffGroupName(type) { return +type === 2 ? 'dynasty' : 'redraft'; }
+
+/* A bracket of six seats has two byes; four or eight seats, none. */
+function playoffByes(seats) {
+  var size = 1;
+  while (size < seats) size *= 2;
+  return size - seats;
+}
+
+function sleeperPairs(rows) {
+  var groups = {}, pairs = [], key;
+  for (var i = 0; i < (rows || []).length; i++) {
+    var row = rows[i];
+    if (row.matchup_id === null || row.matchup_id === undefined) continue;
+    key = 'm' + row.matchup_id;
+    (groups[key] = groups[key] || []).push(String(row.roster_id));
+  }
+  for (key in groups) {
+    if (Object.prototype.hasOwnProperty.call(groups, key) && groups[key].length === 2) {
+      pairs.push(groups[key]);
+    }
+  }
+  return pairs;
+}
+
+/* Sleeper: the official record off /rosters, the rest of the schedule off /matchups.
+   Weeks played are read from the record itself, so the forecast and the platform never
+   disagree about which games are final — a median league plays two results a week. */
+function sleeperSeason(league) {
+  var base = 'https://api.sleeper.app/v1/league/' + encodeURIComponent(league.league_id);
+  return Promise.all([fetchJson(base), fetchJson(base + '/rosters')]).then(function (all) {
+    var meta = all[0] || {}, rosters = all[1] || [], settings = meta.settings || {};
+    var median = !!settings.league_average_match, played = 0, teams = [];
+    for (var i = 0; i < rosters.length; i++) {
+      var s = rosters[i].settings || {}, ids = rosters[i].players || [], roster = [];
+      var games = (s.wins || 0) + (s.losses || 0) + (s.ties || 0);
+      played = Math.max(played, median ? Math.round(games / 2) : games);
+      for (var j = 0; j < ids.length; j++) {
+        var hit = playerBySleeper(ids[j]);
+        if (hit) roster.push(hit.gsis_id);
+      }
+      teams.push({ id: String(rosters[i].roster_id),
+                   name: leagueTeamName(rosters[i].roster_id),
+                   division: s.division === undefined || s.division === null
+                     ? null : String(s.division),
+                   wins: (s.wins || 0) + (s.ties || 0) / 2, losses: s.losses || 0,
+                   ties: s.ties || 0, pf: (s.fpts || 0) + (s.fpts_decimal || 0) / 100,
+                   roster: roster });
+    }
+    var last = (settings.playoff_week_start || 15) - 1, weeks = [];
+    for (var w = played + 1; w <= last; w++) weeks.push(w);
+    var asks = [];
+    for (var k = 0; k < weeks.length; k++) asks.push(fetchJson(base + '/matchups/' + weeks[k]));
+    return Promise.all(asks).then(function (rows) {
+      var ahead = [];
+      for (var r = 0; r < rows.length; r++) {
+        ahead.push({ period: weeks[r], weeks: [weeks[r]], pairs: sleeperPairs(rows[r]) });
+      }
+      return { source: 'sleeper', fetchedAt: Date.now(), type: settings.type || 0,
+               seats: settings.playoff_teams || 6, regular: last, median: median,
+               seedRule: 'points', divisions: (+settings.divisions || 0) > 1,
+               played: played, teams: teams, ahead: ahead, h2h: null };
+    });
+  });
+}
+
+/* ESPN: standings, settings and the whole season's schedule are in the matchup payload,
+   fetched or pasted — so a private league's paste on Fantasy Scores serves this tab
+   too. Kept as IDS, never player objects, on the snapshot rule. */
+function espnSeason(payload, source) {
+  var settings = payload.settings || {}, ss = settings.scheduleSettings || {};
+  var regular = +ss.matchupPeriodCount || 0, spans = ss.matchupPeriods || {};
+  var schedule = payload.schedule || [], decided = {}, open = {}, rosterOf = {}, h2h = {};
+  var i, s, p;
+  for (i = 0; i < schedule.length; i++) {
+    var game = schedule[i];
+    p = game.matchupPeriodId;
+    if (p > regular) continue;
+    if (game.winner && game.winner !== 'UNDECIDED') decided[p] = true; else open[p] = true;
+    var sides = [game.home, game.away];
+    for (s = 0; s < 2; s++) {
+      var entries = ((sides[s] || {}).rosterForCurrentScoringPeriod || {}).entries || [];
+      if (!entries.length) continue;
+      var ids = [];
+      for (var e = 0; e < entries.length; e++) {
+        var hit = playerByEspn(entries[e].playerId);
+        if (hit) ids.push(hit.gsis_id);
+      }
+      rosterOf[String(sides[s].teamId)] = ids;
+    }
+    if (game.home && game.away && game.winner && game.winner !== 'UNDECIDED') {
+      var a = String(game.home.teamId), b = String(game.away.teamId);
+      h2h[a] = h2h[a] || {};
+      h2h[b] = h2h[b] || {};
+      var aw = game.winner === 'HOME' ? 1 : game.winner === 'AWAY' ? 0 : 0.5;
+      h2h[a][b] = (h2h[a][b] || 0) + aw;
+      h2h[b][a] = (h2h[b][a] || 0) + 1 - aw;
+    }
+  }
+  var played = 0;
+  while (played < regular && decided[played + 1] && !open[played + 1]) played++;
+  var teams = [], list = payload.teams || [];
+  for (i = 0; i < list.length; i++) {
+    var rec = (list[i].record || {}).overall || {}, id = String(list[i].id);
+    teams.push({ id: id,
+                 name: list[i].name || ((list[i].location || '') + ' '
+                   + (list[i].nickname || '')).replace(/^ | $/g, '') || leagueTeamName(id),
+                 division: list[i].divisionId === undefined ? null : String(list[i].divisionId),
+                 wins: (rec.wins || 0) + (rec.ties || 0) / 2, losses: rec.losses || 0,
+                 ties: rec.ties || 0, pf: rec.pointsFor || 0, roster: rosterOf[id] || null });
+  }
+  var ahead = [];
+  for (p = played + 1; p <= regular; p++) {
+    var pairs = [];
+    for (i = 0; i < schedule.length; i++) {
+      if (schedule[i].matchupPeriodId !== p || !schedule[i].home || !schedule[i].away) continue;
+      pairs.push([String(schedule[i].home.teamId), String(schedule[i].away.teamId)]);
+    }
+    ahead.push({ period: p, weeks: spans[p] || spans[String(p)] || [p], pairs: pairs });
+  }
+  return { source: source, fetchedAt: Date.now(), type: 0,
+           seats: +ss.playoffTeamCount || 6, regular: regular, median: false,
+           seedRule: ss.playoffSeedingRule === 'H2H_RECORD' ? 'h2h' : 'points',
+           divisions: (ss.divisions || []).length > 1,
+           played: played, teams: teams, ahead: ahead, h2h: h2h };
+}
+
+function fetchPlayoffSeason(league) {
+  if (league.platform === 'sleeper') return sleeperSeason(league);
+  if (league.platform === 'espn') {
+    var week = DATA.current_week || DATA.weeks[0];
+    return fetch(espnMatchupUrl(league.league_id, week), { credentials: 'include' })
+      .then(function (r) { return r.ok ? r.json() : Promise.reject({ status: r.status }); })
+      .then(function (payload) { return espnSeason(payload, 'espn'); });
+  }
+  return Promise.reject({ unsupported: true });
+}
+
+/* A roster with no list of its own (an ESPN paste carries only the week it was taken)
+   falls back to the imported roster for that team. */
+function playoffRoster(team) {
+  if (team.roster && team.roster.length) return team.roster;
+  var teams = (LEAGUE && LEAGUE.teams) || [];
+  for (var i = 0; i < teams.length; i++) {
+    if (String(teams[i].team_id) === team.id) return teams[i].players || [];
+  }
+  return [];
+}
+
+/* Best QB/RB/WR/TE lineup, summed over a period's scoring weeks. Kickers and defences
+   are left out because playoffs.py left them out: our model does not project them, so
+   the weights were measured without them. */
+function playoffLineup(ids, weeks) {
+  var total = 0;
+  for (var w = 0; w < weeks.length; w++) {
+    var entries = [];
+    for (var i = 0; i < ids.length; i++) {
+      var player = BY_ID[ids[i]];
+      if (!player || !PLAYOFF_POSITIONS[player.position]) continue;
+      var entry = entryFor(player, String(weeks[w]));
+      if (entry) entries.push(entry);
+    }
+    entries.sort(function (x, y) { return y.points - x.points; });
+    total += optimize(entries).total;
+  }
+  return total;
+}
+
+function playoffWeights(group, played) {
+  var top = 0, key;
+  for (key in group.weights) {
+    if (Object.prototype.hasOwnProperty.call(group.weights, key)) top = Math.max(top, +key);
+  }
+  return group.weights[String(Math.min(played, top))];
+}
+
+/* Each team's level against the league average, in points a week. Both inputs are
+   taken against their league means first — the fit was within-league, because only
+   the differences between teams decide games. */
+function playoffForecast(season) {
+  var group = (PLAYOFFS.groups || {})[playoffGroupName(season.type)];
+  if (!group || season.played < 1) return null;
+  var weights = playoffWeights(group, season.played), rows = [], i;
+  var sumRoster = 0, sumPpg = 0;
+  for (i = 0; i < season.teams.length; i++) {
+    var team = season.teams[i], ids = playoffRoster(team), lineup = 0;
+    for (var p = 0; p < season.ahead.length; p++) {
+      lineup += playoffLineup(ids, season.ahead[p].weeks) / season.ahead[p].weeks.length;
+    }
+    var roster = season.ahead.length ? lineup / season.ahead.length : 0;
+    var ppg = team.pf / season.played;
+    rows.push({ team: team, roster: roster, ppg: ppg });
+    sumRoster += roster;
+    sumPpg += ppg;
+  }
+  var n = rows.length;
+  for (i = 0; i < n; i++) {
+    rows[i].level = weights.roster * (rows[i].roster - sumRoster / n)
+                  + weights.ppg * (rows[i].ppg - sumPpg / n);
+  }
+  return { group: group, weights: weights, rows: rows,
+           groupName: playoffGroupName(season.type),
+           averageRoster: sumRoster / n, averagePpg: sumPpg / n };
+}
+
+/* Standings order: wins, then the league's tiebreak. Head-to-head ranks a run of teams
+   level on wins by their record against each other, then points. */
+function playoffOrder(season, wins, pf, h2h) {
+  var order = [], i;
+  for (i = 0; i < wins.length; i++) order.push(i);
+  order.sort(function (a, b) { return wins[b] - wins[a] || pf[b] - pf[a]; });
+  if (season.seedRule !== 'h2h') return order;
+  var out = [], start = 0;
+  while (start < order.length) {
+    var end = start;
+    while (end + 1 < order.length && wins[order[end + 1]] === wins[order[start]]) end++;
+    var run = order.slice(start, end + 1);
+    if (run.length > 1) {
+      var mark = {};
+      for (var r = 0; r < run.length; r++) {
+        var won = 0;
+        for (var q = 0; q < run.length; q++) {
+          if (q !== r) won += (h2h[run[r]] || {})[run[q]] || 0;
+        }
+        mark[run[r]] = won;
+      }
+      run.sort(function (a, b) { return mark[b] - mark[a] || pf[b] - pf[a]; });
+    }
+    out = out.concat(run);
+    start = end + 1;
+  }
+  return out;
+}
+
+/* Seeds in order: with divisions, each division's leader first, then the rest — the
+   rule playoffs.playoff_field measured against real brackets. */
+function playoffSeeds(season, order) {
+  var seats = season.seats, i;
+  if (!season.divisions) return order.slice(0, seats);
+  var seen = {}, seeds = [];
+  for (i = 0; i < order.length; i++) {
+    var div = season.teams[order[i]].division;
+    if (div !== null && !seen[div]) { seen[div] = true; seeds.push(order[i]); }
+  }
+  seeds = seeds.slice(0, seats);
+  for (i = 0; i < order.length && seeds.length < seats; i++) {
+    if (seeds.indexOf(order[i]) < 0) seeds.push(order[i]);
+  }
+  return seeds;
+}
+
+function playoffH2hIndex(season) {
+  var index = {}, out = [], i;
+  for (i = 0; i < season.teams.length; i++) index[season.teams[i].id] = i;
+  for (i = 0; i < season.teams.length; i++) {
+    var row = {}, src = (season.h2h || {})[season.teams[i].id] || {};
+    for (var other in src) {
+      if (Object.prototype.hasOwnProperty.call(src, other) && index[other] !== undefined) {
+        row[index[other]] = src[other];
+      }
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+function simulatePlayoffs(season, forecast, mineId) {
+  var teams = season.teams, n = teams.length, index = {}, i, k, p, s;
+  for (i = 0; i < n; i++) index[teams[i].id] = i;
+  var totalPf = 0;
+  for (i = 0; i < n; i++) totalPf += teams[i].pf;
+  /* The scale is the league's average team-week SO FAR — the only one a forecast made
+     now could know, and the one playoffs.simulate used. */
+  var scale = totalPf / (season.played * n);
+  var levelSd = forecast.group.level_sd * scale, weekSd = forecast.group.week_sd * scale;
+  var level0 = [], baseWins = [], basePf = [], baseH2h = playoffH2hIndex(season);
+  for (i = 0; i < n; i++) {
+    level0.push(scale + forecast.rows[i].level);
+    baseWins.push(teams[i].wins);
+    basePf.push(teams[i].pf);
+  }
+  var ahead = [];
+  for (k = 0; k < season.ahead.length; k++) {
+    var pairs = [];
+    for (p = 0; p < season.ahead[k].pairs.length; p++) {
+      var pr = season.ahead[k].pairs[p];
+      if (index[pr[0]] !== undefined && index[pr[1]] !== undefined) {
+        pairs.push([index[pr[0]], index[pr[1]]]);
+      }
+    }
+    ahead.push({ span: season.ahead[k].weeks.length, pairs: pairs });
+  }
+  var mine = mineId !== null && index[mineId] !== undefined ? index[mineId] : -1;
+  var nextFoe = -1;
+  if (mine >= 0 && ahead.length) {
+    for (p = 0; p < ahead[0].pairs.length; p++) {
+      if (ahead[0].pairs[p][0] === mine) nextFoe = ahead[0].pairs[p][1];
+      if (ahead[0].pairs[p][1] === mine) nextFoe = ahead[0].pairs[p][0];
+    }
+  }
+  var rand = seededRandom(hashText(leagueKey(LEAGUE) + '|' + season.played + '|playoffs'));
+  var spare = null;
+  var gauss = function () {
+    if (spare !== null) { var keep = spare; spare = null; return keep; }
+    var u = rand() || 1e-12, v = rand(), r = Math.sqrt(-2 * Math.log(u));
+    spare = r * Math.sin(2 * Math.PI * v);
+    return r * Math.cos(2 * Math.PI * v);
+  };
+  var made = [], bye = [], first = [], winsSum = [];
+  for (i = 0; i < n; i++) { made.push(0); bye.push(0); first.push(0); winsSum.push(0); }
+  var byes = playoffByes(season.seats), ifWin = [0, 0], ifLoss = [0, 0];
+  var level = [], wins = [], pf = [], h2h = [], pts = [];
+  for (s = 0; s < PLAYOFF_SIMS; s++) {
+    for (i = 0; i < n; i++) {
+      level[i] = level0[i] + gauss() * levelSd;
+      wins[i] = baseWins[i];
+      pf[i] = basePf[i];
+      if (season.seedRule === 'h2h') {
+        h2h[i] = {};
+        for (var key in baseH2h[i]) {
+          if (Object.prototype.hasOwnProperty.call(baseH2h[i], key)) h2h[i][key] = baseH2h[i][key];
+        }
+      }
+    }
+    var wonNext = null;
+    for (k = 0; k < ahead.length; k++) {
+      var span = ahead[k].span, root = Math.sqrt(span);
+      for (i = 0; i < n; i++) pts[i] = span * level[i] + gauss() * weekSd * root;
+      for (p = 0; p < ahead[k].pairs.length; p++) {
+        var a = ahead[k].pairs[p][0], b = ahead[k].pairs[p][1];
+        var aw = pts[a] > pts[b] ? 1 : pts[a] < pts[b] ? 0 : 0.5;
+        wins[a] += aw;
+        wins[b] += 1 - aw;
+        if (season.seedRule === 'h2h') {
+          h2h[a][b] = (h2h[a][b] || 0) + aw;
+          h2h[b][a] = (h2h[b][a] || 0) + 1 - aw;
+        }
+        if (k === 0 && (a === mine || b === mine) && aw !== 0.5) {
+          wonNext = (a === mine) === (aw === 1);
+        }
+      }
+      if (season.median) {
+        var sorted = pts.slice(0, n).sort(function (x, y) { return x - y; });
+        var mid = n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+        for (i = 0; i < n; i++) wins[i] += pts[i] > mid ? 1 : pts[i] === mid ? 0.5 : 0;
+      }
+      for (i = 0; i < n; i++) pf[i] += pts[i];
+    }
+    var seeds = playoffSeeds(season, playoffOrder(season, wins, pf, h2h));
+    for (i = 0; i < seeds.length; i++) {
+      made[seeds[i]]++;
+      if (i < byes) bye[seeds[i]]++;
+      if (i === 0) first[seeds[i]]++;
+    }
+    for (i = 0; i < n; i++) winsSum[i] += wins[i];
+    if (wonNext !== null) {
+      var bucket = wonNext ? ifWin : ifLoss;
+      bucket[0]++;
+      if (seeds.indexOf(mine) >= 0) bucket[1]++;
+    }
+  }
+  var out = [];
+  for (i = 0; i < n; i++) {
+    out.push({ made: made[i] / PLAYOFF_SIMS, bye: bye[i] / PLAYOFF_SIMS,
+               first: first[i] / PLAYOFF_SIMS, wins: winsSum[i] / PLAYOFF_SIMS });
+  }
+  return { teams: out, byes: byes, mine: mine, nextFoe: nextFoe,
+           ifWin: ifWin[0] ? ifWin[1] / ifWin[0] : null,
+           ifLoss: ifLoss[0] ? ifLoss[1] / ifLoss[0] : null };
+}
+
+/* A simulated 0% is not elimination and 100% is not a clinch — ten thousand seasons can
+   miss a one-in-twenty-thousand path — so the ends are printed as bounds. */
+function playoffPct(p) {
+  if (p >= 0.995) return p === 1 ? '>99.9%' : '>99%';
+  if (p <= 0.005) return p === 0 ? '<0.1%' : '<1%';
+  return Math.round(p * 100) + '%';
+}
+
+function playoffBar(p) {
+  return '<td class="pbar"><span style="--p:' + Math.round(p * 100) + '%">'
+    + playoffPct(p) + '</span></td>';
+}
+
+function playoffRecord(team) {
+  return Math.round(team.wins - team.ties / 2) + '–' + team.losses
+    + (team.ties ? '–' + team.ties : '');
+}
+
+function pluck(rows, field) {
+  var out = [];
+  for (var i = 0; i < rows.length; i++) out.push(rows[i][field]);
+  return out;
+}
+
+function renderPlayoffs(force) {
+  var status = document.getElementById('playoffstatus');
+  var host = document.getElementById('playofftable');
+  if (!LEAGUE || !LEAGUE.teams || !LEAGUE.teams.length) {
+    host.innerHTML = '<div class="empty">Import your league on the Roster tab and every '
+      + 'team’s chance of making the playoffs appears here.</div>';
+    document.getElementById('playoffpath').innerHTML = '';
+    document.getElementById('playoffsource').textContent = '';
+    document.getElementById('playoffnote').innerHTML = playoffMethodNote(null, null);
+    status.textContent = '';
+    return;
+  }
+  if (!PLAYOFFS.groups) {
+    host.innerHTML = '<div class="empty">This build carries no playoff measurement '
+      + '(fixtures/playoffs.json), so there is nothing honest to forecast with.</div>';
+    status.textContent = '';
+    return;
+  }
+  var key = leagueKey(LEAGUE);
+  if (!force && playoffState.key === key && playoffState.season) { paintPlayoffs(); return; }
+  playoffState.key = key;
+  playoffState.season = null;
+  status.textContent = 'Loading…';
+  fetchPlayoffSeason(LEAGUE).then(function (season) {
+    if (playoffState.key !== key) return;
+    playoffState.season = season;
+    status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    paintPlayoffs();
+  }, function (err) {
+    if (playoffState.key !== key) return;
+    err = err || {};
+    if (LEAGUE.platform === 'espn' && LEAGUE.season) {
+      /* A private league: the standings and schedule from the last Fantasy Scores
+         paste. Its age is printed, because a week finished since looks identical. */
+      playoffState.season = LEAGUE.season;
+      status.textContent = 'Private league — standings as of your paste, '
+        + new Date(LEAGUE.season.fetchedAt).toLocaleString();
+      paintPlayoffs();
+      return;
+    }
+    document.getElementById('playoffpath').innerHTML = '';
+    host.innerHTML = '<div class="empty">'
+      + (LEAGUE.platform === 'espn'
+        ? 'ESPN would not hand this league’s standings to the page — a private league '
+          + 'needs your login cookie. Paste this week’s matchups on the <b>Fantasy Scores'
+          + '</b> tab once; this tab reads the standings and schedule from that paste.'
+        : err.unsupported
+          ? 'This league was not imported from Sleeper or ESPN, so there are no standings '
+            + 'to read. Re-import it on the Roster tab.'
+          : 'Could not reach Sleeper (' + esc(String(err.message || err.status || err))
+            + '). Standings are fetched live, so this needs a working connection.')
+      + '</div>';
+    status.textContent = '';
+  });
+}
+
+function paintPlayoffs() {
+  var season = playoffState.season, host = document.getElementById('playofftable');
+  var path = document.getElementById('playoffpath');
+  document.getElementById('playoffsource').textContent =
+    season.source === 'sleeper' ? 'Sleeper' : season.source === 'espn' ? 'ESPN' : 'ESPN paste';
+  if (season.played < 1) {
+    host.innerHTML = '<div class="empty">No games are final yet. The odds start once week '
+      + '1 is in the books — the measurement begins after a week of results.</div>';
+    path.innerHTML = '';
+    document.getElementById('playoffnote').innerHTML = playoffMethodNote(season, null);
+    return;
+  }
+  var forecast = playoffForecast(season), mineId = myTeamId();
+  var sim = simulatePlayoffs(season, forecast, mineId);
+  var order = playoffOrder(season, pluck(season.teams, 'wins'), pluck(season.teams, 'pf'),
+                           playoffH2hIndex(season));
+  var seeds = playoffSeeds(season, order), seedOf = {};
+  for (var s = 0; s < seeds.length; s++) seedOf[seeds[s]] = s + 1;
+  var html = '<div class="scroll"><table class="playoffs"><thead><tr><th>Seed</th>'
+    + '<th class="l">Team</th><th>Record</th><th>Points for</th><th>Per game</th>'
+    + '<th title="Best QB/RB/WR/TE lineup from the roster today, per remaining week, in '
+    + 'your Settings scoring">Lineup proj.</th>'
+    + '<th title="The measured blend of the two columns before it, against the league '
+    + 'average, in points a week">Level</th><th>Proj. record</th><th>Playoffs</th>'
+    + (sim.byes ? '<th>Bye</th>' : '') + '<th>#1 seed</th></tr></thead><tbody>';
+  var games = season.regular * (season.median ? 2 : 1);
+  for (var r = 0; r < order.length; r++) {
+    var i = order[r], team = season.teams[i], row = forecast.rows[i], odds = sim.teams[i];
+    var classes = [];
+    if (team.id === mineId) classes.push('mine');
+    if (r === season.seats - 1 && !season.divisions) classes.push('cut');
+    html += '<tr' + (classes.length ? ' class="' + classes.join(' ') + '"' : '') + '>'
+      + '<td>' + (seedOf[i] || '') + '</td>'
+      + '<td class="l">' + esc(team.name) + '</td>'
+      + '<td>' + playoffRecord(team) + '</td>'
+      + '<td>' + team.pf.toFixed(1) + '</td>'
+      + '<td>' + row.ppg.toFixed(1) + '</td>'
+      + '<td>' + row.roster.toFixed(1) + '</td>'
+      + '<td>' + (row.level >= 0 ? '+' : '−') + Math.abs(row.level).toFixed(1) + '</td>'
+      + '<td>' + odds.wins.toFixed(1) + '–' + (games - odds.wins).toFixed(1) + '</td>'
+      + playoffBar(odds.made)
+      + (sim.byes ? playoffBar(odds.bye) : '')
+      + playoffBar(odds.first) + '</tr>';
+  }
+  host.innerHTML = html + '</tbody></table></div>'
+    + '<div class="note">Sorted by today’s standings; '
+    + (season.divisions ? 'division leaders are seeded first. '
+       : 'the dashed line is the playoff cut. ')
+    + season.seats + ' of ' + season.teams.length + ' teams make it'
+    + (sim.byes ? ', and the top ' + sim.byes + ' skip the first round' : '')
+    + '. <b>Level</b> is points a week against the league average; <b>Proj. record</b> '
+    + 'counts ' + (season.median ? 'median games as well as matchups' : 'matchups')
+    + '.</div>';
+  path.innerHTML = playoffPath(season, forecast, sim, order);
+  document.getElementById('playoffnote').innerHTML = playoffMethodNote(season, forecast);
+}
+
+/* Your team, in sentences — every clause from a number in the table or the simulation. */
+function playoffPath(season, forecast, sim, order) {
+  if (sim.mine < 0) {
+    return '<div class="empty">Pick your team on the Roster tab and this card follows it.</div>';
+  }
+  var team = season.teams[sim.mine], odds = sim.teams[sim.mine], row = forecast.rows[sim.mine];
+  var place = order.indexOf(sim.mine) + 1, left = season.regular - season.played;
+  var text = '<b>' + esc(team.name) + '</b> is ' + playoffRecord(team) + ', '
+    + ordinal(place) + ' of ' + season.teams.length + ', with <b>' + playoffPct(odds.made)
+    + '</b> to make the playoffs';
+  text += left ? ' and ' + left + (left === 1 ? ' week' : ' weeks') + ' left.' : '.';
+  text += ' The forecast has you '
+    + (Math.abs(row.level) < 0.5 ? 'right at the league average'
+      : Math.abs(row.level).toFixed(1) + ' points a week '
+        + (row.level > 0 ? 'better' : 'worse') + ' than the league average')
+    + ' — your lineup projects ' + row.roster.toFixed(1) + ' a week against '
+    + forecast.averageRoster.toFixed(1) + ' for the league, and you have scored '
+    + row.ppg.toFixed(1) + ' a game against ' + forecast.averagePpg.toFixed(1) + '.';
+  if (sim.nextFoe >= 0 && sim.ifWin !== null && sim.ifLoss !== null) {
+    var foe = season.teams[sim.nextFoe];
+    text += '<br><br>Week ' + season.ahead[0].period + ' against <b>' + esc(foe.name)
+      + '</b> (' + playoffRecord(foe) + '): win and it is <b>' + playoffPct(sim.ifWin)
+      + '</b>, lose and it is <b>' + playoffPct(sim.ifLoss) + '</b>.';
+  }
+  return '<div class="report">' + text + '</div>';
+}
+
+/* Every number here is read from the fixture or the forecast, never written into the
+   prose, on the draft tab's rule. */
+function playoffMethodNote(season, forecast) {
+  var groups = PLAYOFFS.groups || {}, audit = PLAYOFFS.audit || {};
+  if (!groups.redraft) return 'This build carries no playoff measurement.';
+  var name = forecast ? forecast.groupName : (season ? playoffGroupName(season.type) : 'redraft');
+  var g = groups[name] || groups.redraft, text = '';
+  if (forecast) {
+    text += '<b>How a game still to play is decided.</b> Each team gets a level: '
+      + forecast.weights.roster.toFixed(2) + ' × its lineup projection plus '
+      + forecast.weights.ppg.toFixed(2) + ' × its points per game, both against the league '
+      + 'average. Those are the weights a ' + name + ' league earns after ' + season.played
+      + (season.played === 1 ? ' week' : ' weeks') + ', measured on ' + g.leagues
+      + ' completed ' + PLAYOFFS.season + ' Sleeper ' + name + ' leagues — how well each '
+      + 'predicted the rest of the season from that point, using only what existed then. '
+      + 'Then ' + PLAYOFF_SIMS.toLocaleString() + ' seasons are played out: a team’s week '
+      + 'lands within about ±' + Math.round(g.week_sd * 100) + '% of the league’s average '
+      + 'week of its level, and the level itself is uncertain by ±'
+      + Math.round(g.level_sd * 1000) / 10 + '%, drawn once per season.<br><br>';
+  }
+  var b = g.brier || {};
+  text += '<b>What it is worth.</b> Graded on ' + g.test_leagues + ' ' + name
+    + ' leagues held out of the fit, at points through the season: Brier score <b>'
+    + (b['roster + points'] || 0).toFixed(3) + '</b>, against '
+    + (b['record only'] || 0).toFixed(3) + ' from the record alone (every game left a coin '
+    + 'flip), ' + (b['points per game'] || 0).toFixed(3) + ' from points per game alone '
+    + 'and ' + (b['roster only'] || 0).toFixed(3) + ' from the roster alone. Lower is '
+    + 'better. And when it gave a team a chance, this is how often that team made it:';
+  var rel = g.reliability || [];
+  text += '<table class="lu" style="margin:6px 0 10px"><thead><tr><th class="l">It said</th>'
+    + '<th>Teams</th><th>Average said</th><th>Made it</th></tr></thead><tbody>';
+  for (var i = 0; i < rel.length; i++) {
+    text += '<tr><td class="l">' + Math.round(rel[i][0] * 100) + '–'
+      + Math.round(rel[i][1] * 100) + '%</td><td>' + rel[i][2].toLocaleString()
+      + '</td><td>' + Math.round(rel[i][3] * 100) + '%</td><td>'
+      + Math.round(rel[i][4] * 100) + '%</td></tr>';
+  }
+  text += '</tbody></table>';
+  text += '<b>Who gets in.</b> Record, then points scored, with each division’s leader in '
+    + 'first — Sleeper’s rule, which picks the real playoff field in ' + audit.field_match
+    + ' of ' + audit.leagues + ' completed leagues.';
+  if (season && season.seedRule === 'h2h') {
+    text += ' This ESPN league breaks ties on head-to-head record instead, and the tab '
+      + 'follows it; that tiebreak was not part of the measurement.';
+  }
+  text += '<br><br><b>What it does not know.</b> This week counts once its games are '
+    + 'final; until then it is simulated like any other. A simulated 0% is not elimination '
+    + 'and 100% is not a clinch. The measurement used our model alone for the lineup term — '
+    + 'older market projections exist only for the week they were made — while this tab '
+    + 'uses the blended projections, which are a little better, so if anything points per '
+    + 'game is weighted slightly generously here. Kickers and defences are left out of the '
+    + 'lineup term, as they were in the measurement. Nothing on this tab feeds a projection '
+    + 'or a lineup.';
+  return text;
 }
 
 function renderCatchingBacks() {
@@ -7811,6 +8471,7 @@ function adoptLeague(result) {
     /* Pasted matchups are the only copy a private ESPN league has of its scoreboard,
        and refreshing the roster must not throw away this week's paste. */
     if (was.matchups) rec.matchups = was.matchups;
+    if (was.season) rec.season = was.season;
     state.leagues[at] = rec;
   } else {
     state.leagues.push(rec);
@@ -11021,6 +11682,7 @@ function render() {
   if (currentView === 'matchup') renderMatchup(false);
   /* Repaints from what is already fetched, so a scoring change rewrites the report. */
   if (currentView === 'report') renderReport(false);
+  if (currentView === 'playoffs') renderPlayoffs(false);
   renderRoster();
   renderLeague();
   renderDraft();
@@ -11057,6 +11719,9 @@ document.addEventListener('click', function (event) {
     // The weekly report is fetched on open too. It does not poll: it is about a week
     // that is over, and Refresh is there for one that is not.
     if (currentView === 'report') renderReport(false);
+    // Standings are fetched on open as well; the simulation is local and repaints from
+    // what was fetched when the scoring panel changes.
+    if (currentView === 'playoffs') renderPlayoffs(false);
     // Trades are computed on open for the same reason, but the cost is local: the
     // optimiser runs hundreds of times to grade a league's worth of swaps. The draft
     // tab's report card is the same trade-off — a league's worth of lineups.
@@ -11152,6 +11817,8 @@ document.addEventListener('click', function (event) {
     renderMatchup(true);
   } else if (target.id === 'refreshreport') {
     renderReport(true);
+  } else if (target.id === 'refreshplayoffs') {
+    renderPlayoffs(true);
   } else if (target.id === 'matchpasteload') {
     var pasted = document.getElementById('matchpastejson').value.replace(/^\s+|\s+$/g, '');
     if (!pasted) setMatchPasteStatus('Nothing pasted yet.', 'warn');
