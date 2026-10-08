@@ -2791,9 +2791,8 @@ function commentary(entry) {
 
   /* 3. Matchup — shown because everyone looks at it, weighted at zero because
         it measured at zero. Saying both is the honest move. */
-  var table = (FACTS.defense_allowed || {})[p.position];
-  if (table && w.opponent && table[w.opponent]) {
-    var pair = table[w.opponent];
+  var allowed = yardsAllowedText(p.position, w.opponent);
+  if (allowed) {
     /* Matchup used to be reported as "not used in the projection". That was true, and
        wrong: it rested on a WR-only measurement generalised to every position. Measured
        per position, a running back's matchup is worth ~2.8x a receiver's, so the model
@@ -2804,9 +2803,7 @@ function commentary(entry) {
         + p.position + ' between the best and worst matchup'
         + (effect.swing_points < 0.6 ? ', which is close to nothing.' : '.')
       : ' Not used in the projection.';
-    parts.push(esc(w.opponent) + ' allowed the ' + ordinal(pair[0]) + '-most points to '
-      + p.position + 's in ' + FACTS.defense_allowed_season + ' ('
-      + pair[1].toFixed(1) + '/game).' + worth);
+    parts.push(allowed + '.' + worth);
   }
 
   /* 4. Weather — only where it measured. Wind costs a QB 0.089 pts/mph and a
@@ -3007,21 +3004,57 @@ function weekImpliedAverage() {
 }
 
 /* WHY THE MATCHUP IS SOFT OR TOUGH, in the terms a reader already thinks in.
-   `defense_allowed` ranks 1 = MOST points conceded, so a good defence carries a high
+   The yards table ranks 1 = MOST yards conceded, so a good defence carries a high
    rank and has to be flipped: "29th-most" is how nobody describes a stout front, and
    "4th-fewest" is how everybody does. The team count comes off the table rather than
    being hardcoded at 32, so the flip stays right if the league ever changes size. */
 function matchupCause(position, opponent) {
-  var table = (FACTS.defense_allowed || {})[position];
-  if (!table || !opponent || !table[opponent]) return '';
+  return yardsAllowedText(position, opponent);
+}
+
+/* THE MATCHUP LINES SAY YARDS, NOT POINTS. A manager asks "does this defence give up
+   yards on the ground, or to tight ends", so backs are judged on rushing yards to backs
+   and each pass-catching position on receiving yards to that position. This is wording
+   only — the model's matchup adjustment still reads `defense_allowed`, the points table
+   matchup.py measured. The table is this season so far, with last season beside it,
+   because four games is a small sample and defences barely repeat. */
+var YARDS_WHAT = { QB: 'passing yards', RB: 'rushing yards to RBs',
+                   WR: 'receiving yards to WRs', TE: 'receiving yards to TEs' };
+
+function yardsPlace(table, opponent) {
+  if (!table || !opponent || !table[opponent]) return null;
   var teams = 0, key;
   for (key in table) if (Object.prototype.hasOwnProperty.call(table, key)) teams++;
-  var rank = table[opponent][0], perGame = table[opponent][1];
-  var soft = rank * 2 <= teams;
-  var place = soft ? rank : (teams + 1 - rank);
-  return esc(opponent) + ' allowed the ' + ordinal(place) + '-'
-    + (soft ? 'most' : 'fewest') + ' points to ' + esc(position) + 's ('
-    + perGame.toFixed(1) + '/gm)';
+  var rank = table[opponent][0], soft = rank * 2 <= teams;
+  return { soft: soft, place: soft ? rank : teams + 1 - rank,
+           perGame: table[opponent][1], games: table[opponent][2] };
+}
+
+function defenceYards(position, opponent) {
+  var facts = FACTS.defense_yards || {};
+  var now = yardsPlace((facts.table || {})[position], opponent);
+  if (!now || !YARDS_WHAT[position]) return null;
+  now.season = facts.season;
+  now.what = YARDS_WHAT[position];
+  var before = yardsPlace((facts.prior || {})[position], opponent);
+  if (before) before.season = facts.prior_season;
+  now.prior = before;
+  return now;
+}
+
+/* "the most", not "the 1st-most". `bare` drops the quantity, for the last-season
+   aside that follows a sentence which has already named it. */
+function yardsRanking(d, bare) {
+  return (d.place === 1 ? '' : ordinal(d.place) + '-') + (d.soft ? 'most' : 'fewest')
+    + (bare ? '' : ' ' + d.what);
+}
+
+function yardsAllowedText(position, opponent) {
+  var d = defenceYards(position, opponent);
+  if (!d) return '';
+  return esc(opponent) + ' allowed the ' + yardsRanking(d) + ' in ' + d.season + ' ('
+    + d.perGame.toFixed(1) + '/gm over ' + d.games + (d.games === 1 ? ' game' : ' games')
+    + (d.prior ? '; ' + yardsRanking(d.prior, true) + ' in ' + d.prior.season : '') + ')';
 }
 
 /* WHY THE GAME IS A SHOOTOUT OR A SLOG. The implied total against the week's own
@@ -3155,8 +3188,8 @@ function weekReasonCell(entry) {
 
   /* EACH FACTOR GETS THE REASON, NOT JUST THE LABEL. "-0.8 tough matchup" says the
      same thing twice — the sign already told you it was tough — and answers none of
-     what a manager is deciding on. "-0.8 SEA allowed the 4th-fewest points to RBs
-     (13.1/gm)" is the same number carrying the fact behind it. The label is kept as the
+     what a manager is deciding on. "-0.8 SEA allowed the 4th-fewest rushing yards
+     to RBs" is the same number carrying the fact behind it. The label is kept as the
      fallback for a factor whose supporting fact is missing from the build, which is
      normal: weather has no forecast beyond ~16 days, so a preseason build has none. */
   var total = 0, out = [];
@@ -7001,15 +7034,10 @@ function reportTeamPoss(ctx, abbr) {
   return esc(abbr) + '’s';
 }
 
-/* How the opponent treated this position LAST season, flipped so a stingy defence reads
-   as "4th-fewest" — the same flip matchupCause makes, for the same reason. */
+/* How the opponent has treated this position in yards, flipped so a stingy defence reads
+   as "4th-fewest" — the same reading Start / Sit prints, from the same helper. */
 function reportDefence(position, opponent) {
-  var table = (FACTS.defense_allowed || {})[position];
-  if (!table || !opponent || !table[opponent]) return null;
-  var teams = 0, key;
-  for (key in table) if (Object.prototype.hasOwnProperty.call(table, key)) teams++;
-  var rank = table[opponent][0], soft = rank * 2 <= teams;
-  return { soft: soft, place: soft ? rank : teams + 1 - rank, perGame: table[opponent][1] };
+  return defenceYards(position, opponent);
 }
 
 function reportAge(player, week) {
@@ -7139,8 +7167,7 @@ function reportDefenceClause(f) {
   if (!d || d.place > 8) return '';
   var where = (f.home ? 'against ' : 'at ') + esc(f.opponent);
   var good = f.rank !== null && f.rank <= REPORT_TIERS[f.pos][1];
-  var ranking = ordinal(d.place) + '-' + (d.soft ? 'most' : 'fewest') + ' points to '
-    + f.pos + 's in ' + FACTS.defense_allowed_season;
+  var ranking = yardsRanking(d) + ' in ' + d.season;
   if (!d.soft) {
     return good ? 'And he did it ' + where + ', a tough draw: they allowed the ' + ranking + '.'
                 : 'A tough draw ' + where + ', which allowed the ' + ranking + '.';
@@ -7633,8 +7660,10 @@ function reportNote() {
     + 'workload is 10+ carries and 65% or more of the backfield’s; a <i>split</i> is '
     + '40–65%; less is <i>change-of-pace</i>. An <i>every-down</i> receiver played 80% of '
     + 'snaps and a <i>part-time</i> one under half. A <i>tough</i> or <i>soft</i> draw is '
-    + 'one of the eight defences that allowed the fewest or most points to that position in '
-    + FACTS.defense_allowed_season + '. Age gets a mention only in a strong week and past '
+    + 'one of the eight defences that allowed the fewest or most yards to that position in '
+    + ((FACTS.defense_yards || {}).season || FACTS.defense_allowed_season)
+    + ' — rushing yards for a back, receiving yards for a receiver or tight end, passing '
+    + 'yards for a quarterback. Age gets a mention only in a strong week and past '
     + REPORT_OLD.RB + ' for a back, ' + REPORT_OLD.WR + ' for a receiver, ' + REPORT_OLD.TE
     + ' for a tight end and ' + REPORT_OLD.QB + ' for a quarterback. '
     + '<i>Right about where we projected</i> means within '
