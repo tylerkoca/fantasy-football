@@ -211,6 +211,7 @@
   .tab[data-view="matchup"]  { --tabhue: #e7c64a; }
   .tab[data-view="report"]   { --tabhue: #9ad26a; }
   .tab[data-view="playoffs"] { --tabhue: #ef7b6b; }
+  .tab[data-view="luck"]     { --tabhue: #8fb8a8; }
   .tab[data-view="scores"]   { --tabhue: #c2477e; }
   .tab[data-view="roster"]   { --tabhue: #4fc9d8; }
   .tab[data-view="settings"] { --tabhue: #bcc4ce; }
@@ -254,6 +255,13 @@
      written, so the bar is reinforcement rather than the only carrier. */
   table.playoffs tr.mine td { background: color-mix(in srgb, var(--section) 12%, transparent); }
   table.playoffs tr.cut td { border-bottom: 2px dashed var(--section); }
+  /* The luck tables. A result the schedule decided is tinted, and the sign and the
+     W/L letter are always printed, so the tint is never the only carrier. */
+  #view-luck { --section: #4f8a76; }
+  table.luck tr.mine td { background: color-mix(in srgb, var(--section) 12%, transparent); }
+  table.luck td.unlucky { color: #d0584c; font-weight: 600; }
+  table.luck td.lucky { color: #3f9a5c; font-weight: 600; }
+  .lucktext p { margin: 0 0 8px; line-height: 1.5; }
   td.pbar span { display: inline-block; min-width: 58px; padding: 1px 6px; border-radius: 4px;
     background: linear-gradient(90deg, color-mix(in srgb, var(--section) 30%, transparent)
       var(--p), transparent var(--p)); }
@@ -895,6 +903,7 @@
     <button class="tab" role="tab" data-view="matchup" aria-selected="false">Fantasy Scores</button>
     <button class="tab" role="tab" data-view="report" aria-selected="false">Weekly Report</button>
     <button class="tab" role="tab" data-view="playoffs" aria-selected="false">Playoffs</button>
+    <button class="tab" role="tab" data-view="luck" aria-selected="false">Luck</button>
     <button class="tab" role="tab" data-view="rankings" aria-selected="false">Rankings</button>
     <button class="tab" role="tab" data-view="waivers" aria-selected="false">Waivers</button>
     <button class="tab" role="tab" data-view="trade" aria-selected="false">Trades</button>
@@ -1347,6 +1356,27 @@
     <div class="card">
       <h2>Where the odds come from</h2>
       <div class="note" id="playoffnote" style="margin-top:0"></div>
+    </div>
+  </section>
+
+  <!-- LUCK. How much of each record is the schedule: every team's score set against the
+       whole league each week, from the platform's final scores alone. See renderLuck. -->
+  <section class="view" id="view-luck" hidden>
+    <div class="card">
+      <h2>Your luck <span class="tag" id="lucksource"></span></h2>
+      <div class="row" style="margin-bottom:10px; align-items:flex-end">
+        <div><button class="primary" id="refreshluck">Refresh</button></div>
+        <div class="note" id="luckstatus" style="margin:0"></div>
+      </div>
+      <div id="luckmine"></div>
+    </div>
+    <div class="card">
+      <h2>The league, unluckiest first</h2>
+      <div id="lucktable"></div>
+    </div>
+    <div class="card">
+      <h2>What counts as luck</h2>
+      <div class="note" id="lucknote" style="margin-top:0"></div>
     </div>
   </section>
 
@@ -6413,6 +6443,7 @@ function adoptMatchupJson(text) {
      all the Playoffs tab needs — so a private league's paste serves that tab too. */
   LEAGUE.season = espnSeason(payload, 'espn-paste');
   if (currentView === 'playoffs') playoffState.key = null;
+  luckState.key = null;
   var weeks = [];
   for (var k in LEAGUE.matchups) {
     if (Object.prototype.hasOwnProperty.call(LEAGUE.matchups, k)) weeks.push(+k);
@@ -6531,7 +6562,7 @@ function espnSeason(payload, source) {
   var settings = payload.settings || {}, ss = settings.scheduleSettings || {};
   var regular = +ss.matchupPeriodCount || 0, spans = ss.matchupPeriods || {};
   var schedule = payload.schedule || [], decided = {}, open = {}, rosterOf = {}, h2h = {};
-  var i, s, p;
+  var scored = {}, i, s, p;
   for (i = 0; i < schedule.length; i++) {
     var game = schedule[i];
     p = game.matchupPeriodId;
@@ -6555,6 +6586,10 @@ function espnSeason(payload, source) {
       var aw = game.winner === 'HOME' ? 1 : game.winner === 'AWAY' ? 0 : 0.5;
       h2h[a][b] = (h2h[a][b] || 0) + aw;
       h2h[b][a] = (h2h[b][a] || 0) + 1 - aw;
+      /* The final scores themselves, for the Luck tab — a few numbers a week, kept so a
+         private league's paste serves that tab as well. */
+      (scored[p] = scored[p] || []).push([a, +game.home.totalPoints || 0,
+                                          b, +game.away.totalPoints || 0]);
     }
   }
   var played = 0;
@@ -6578,7 +6613,11 @@ function espnSeason(payload, source) {
     }
     ahead.push({ period: p, weeks: spans[p] || spans[String(p)] || [p], pairs: pairs });
   }
-  return { source: source, fetchedAt: Date.now(), type: 0,
+  var results = [];
+  for (p = 1; p <= played; p++) {
+    if (scored[p]) results.push({ period: p, games: scored[p] });
+  }
+  return { source: source, fetchedAt: Date.now(), type: 0, results: results,
            seats: +ss.playoffTeamCount || 6, regular: regular, median: false,
            seedRule: ss.playoffSeedingRule === 'H2H_RECORD' ? 'h2h' : 'points',
            divisions: (ss.divisions || []).length > 1,
@@ -7046,6 +7085,400 @@ function playoffMethodNote(season, forecast) {
     + 'game is weighted slightly generously here. Kickers and defences are left out of the '
     + 'lineup term, as they were in the measurement. Nothing on this tab feeds a projection '
     + 'or a lineup.';
+  return text;
+}
+
+/* ------------------------------------------------------------------
+ * LUCK — how much of a record is the schedule, and how much is the team.
+ *
+ * EVERY NUMBER IS THE PLATFORM'S FINAL SCORES AND NOTHING ELSE. No projection, no model:
+ * a week's score is taken as given, and the only question is who it happened to be
+ * played against. That is the one part of a record a manager does not control, so it is
+ * the honest meaning of "luck" — a low score that lost is not bad luck, it is a low
+ * score, and this tab says so rather than consoling anyone.
+ *
+ * The measure is ALL-PLAY: in each week, the share of the league your score beat. That
+ * is exactly the chance of winning against an opponent drawn at random from everyone
+ * else that week, so summed over the weeks it is the wins a random schedule would have
+ * handed you. Actual wins minus that is schedule luck, in wins. The weeks are
+ * independent given the scores, so the chance of any record is a Poisson-binomial over
+ * the weekly chances, computed exactly rather than simulated — which is what lets a
+ * losing streak be priced as "1 in N".
+ *
+ * Displayed only: nothing here reaches a projection, a ranking or a lineup.
+ * ------------------------------------------------------------------ */
+var luckState = { key: null, season: null };
+
+/* Sleeper keeps no season-long schedule in one payload, so the finished weeks are read
+   one /matchups call each — only when this tab opens. A median league's extra game is
+   already an all-play result against the field, so only the head-to-head games are
+   graded; the note says so. */
+function sleeperLuckSeason(league) {
+  var base = 'https://api.sleeper.app/v1/league/' + encodeURIComponent(league.league_id);
+  return sleeperSeason(league).then(function (season) {
+    var asks = [];
+    for (var w = 1; w <= season.played; w++) asks.push(fetchJson(base + '/matchups/' + w));
+    return Promise.all(asks).then(function (weeks) {
+      var results = [];
+      for (var r = 0; r < weeks.length; r++) {
+        var groups = {}, games = [], rows = weeks[r] || [], key;
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i].matchup_id === null || rows[i].matchup_id === undefined) continue;
+          key = 'm' + rows[i].matchup_id;
+          (groups[key] = groups[key] || []).push(rows[i]);
+        }
+        for (key in groups) {
+          if (!Object.prototype.hasOwnProperty.call(groups, key) || groups[key].length !== 2) {
+            continue;
+          }
+          var x = groups[key][0], y = groups[key][1];
+          games.push([String(x.roster_id), +x.points || 0, String(y.roster_id), +y.points || 0]);
+        }
+        if (games.length) results.push({ period: r + 1, games: games });
+      }
+      season.results = results;
+      return season;
+    });
+  });
+}
+
+function fetchLuckSeason(league) {
+  if (league.platform === 'sleeper') return sleeperLuckSeason(league);
+  return fetchPlayoffSeason(league);
+}
+
+/* P(exactly k wins) for independent weeks won with chance p[i]. Half-wins from a tied
+   all-play are rare enough that the distribution is over whole wins. */
+function luckDistribution(p) {
+  var dist = [1];
+  for (var i = 0; i < p.length; i++) {
+    var next = [];
+    for (var k = 0; k <= dist.length; k++) {
+      next.push((k < dist.length ? dist[k] * (1 - p[i]) : 0)
+        + (k > 0 ? dist[k - 1] * p[i] : 0));
+    }
+    dist = next;
+  }
+  return dist;
+}
+
+function luckOneIn(prob) {
+  if (prob <= 0) return 'never';
+  if (prob >= 0.5) return 'more often than not';
+  var n = 1 / prob;
+  return '1 in ' + (n < 10 ? n.toFixed(1) : Math.round(n).toLocaleString());
+}
+
+/* Everything the tab prints, from the season's final scores. */
+function luckAnalyse(season) {
+  var teams = season.teams, index = {}, i, w, g;
+  for (i = 0; i < teams.length; i++) index[teams[i].id] = i;
+  var rows = [];
+  for (i = 0; i < teams.length; i++) {
+    rows.push({ team: teams[i], weeks: [], wins: 0, expected: 0, pf: 0, pa: 0,
+                oppOver: 0, allW: 0, allL: 0, allT: 0 });
+  }
+  var results = season.results || [];
+  /* Each team's own scores, so an opponent's week can be set against his usual. */
+  var own = {};
+  for (w = 0; w < results.length; w++) {
+    for (g = 0; g < results[w].games.length; g++) {
+      var m = results[w].games[g];
+      (own[m[0]] = own[m[0]] || []).push(m[1]);
+      (own[m[2]] = own[m[2]] || []).push(m[3]);
+    }
+  }
+  function usualExcept(id, score) {
+    var list = own[id] || [], sum = 0;
+    for (var k = 0; k < list.length; k++) sum += list[k];
+    return list.length > 1 ? (sum - score) / (list.length - 1) : score;
+  }
+  for (w = 0; w < results.length; w++) {
+    var games = results[w].games, field = [];
+    for (g = 0; g < games.length; g++) {
+      field.push({ id: games[g][0], pts: games[g][1] });
+      field.push({ id: games[g][2], pts: games[g][3] });
+    }
+    for (g = 0; g < games.length; g++) {
+      for (var side = 0; side < 2; side++) {
+        var id = games[g][side * 2], pts = games[g][side * 2 + 1];
+        var foe = games[g][2 - side * 2], foePts = games[g][3 - side * 2];
+        var row = rows[index[id]];
+        if (!row) continue;
+        var beat = 0, tied = 0, rank = 1;
+        for (var f = 0; f < field.length; f++) {
+          if (field[f].id === id) continue;
+          if (pts > field[f].pts) beat++;
+          else if (pts === field[f].pts) tied++;
+          else rank++;
+        }
+        var others = field.length - 1, p = others ? (beat + tied / 2) / others : 0.5;
+        var result = pts > foePts ? 1 : pts < foePts ? 0 : 0.5;
+        var usual = usualExcept(foe, foePts);
+        row.weeks.push({ period: results[w].period, pts: pts, foe: foe, foePts: foePts,
+                         p: p, result: result, rank: rank, teams: field.length,
+                         beat: beat, others: others, foeUsual: usual });
+        row.wins += result;
+        row.expected += p;
+        row.pf += pts;
+        row.pa += foePts;
+        row.oppOver += foePts - usual;
+        row.allW += beat;
+        row.allL += others - beat - tied;
+        row.allT += tied;
+      }
+    }
+  }
+  for (i = 0; i < rows.length; i++) {
+    var r0 = rows[i], probs = [];
+    for (w = 0; w < r0.weeks.length; w++) probs.push(r0.weeks[w].p);
+    var dist = luckDistribution(probs), atMost = 0, atLeast = 0, won = Math.floor(r0.wins);
+    for (var k = 0; k < dist.length; k++) {
+      if (k <= won) atMost += dist[k];
+      if (k >= Math.ceil(r0.wins)) atLeast += dist[k];
+    }
+    r0.luck = r0.wins - r0.expected;
+    r0.dist = dist;
+    r0.atMost = atMost;
+    r0.atLeast = atLeast;
+  }
+  return { rows: rows, index: index, weeks: results.length };
+}
+
+/* The run of results that ends most recently and is all one kind: the stretch a manager
+   is actually asking about. Priced as the chance of that exact run of results given
+   the scores, and set beside the chance of it from a coin. */
+function luckStreak(row) {
+  var weeks = row.weeks, n = weeks.length;
+  if (!n) return null;
+  var kind = weeks[n - 1].result, start = n - 1;
+  if (kind === 0.5) return null;
+  while (start > 0 && weeks[start - 1].result === kind) start--;
+  var prob = 1;
+  for (var i = start; i < n; i++) prob *= kind ? weeks[i].p : 1 - weeks[i].p;
+  return { kind: kind, from: start, length: n - start, prob: prob,
+           coin: Math.pow(0.5, n - start) };
+}
+
+/* Your record had you played every other team's schedule instead: their opponent each
+   week, and where that opponent was you, the team you would have been swapped with. */
+function luckSwaps(season, analysis, mine) {
+  var out = [], me = analysis.rows[mine], myScore = {};
+  for (var w = 0; w < me.weeks.length; w++) myScore[me.weeks[w].period] = me.weeks[w].pts;
+  for (var i = 0; i < analysis.rows.length; i++) {
+    if (i === mine) continue;
+    var row = analysis.rows[i], wins = 0, games = 0;
+    for (var k = 0; k < row.weeks.length; k++) {
+      var week = row.weeks[k], mineThen = myScore[week.period];
+      if (mineThen === undefined) continue;
+      var against = week.foe === me.team.id ? week.pts : week.foePts;
+      wins += mineThen > against ? 1 : mineThen < against ? 0 : 0.5;
+      games++;
+    }
+    out.push({ name: row.team.name, wins: wins, games: games });
+  }
+  out.sort(function (a, b) { return b.wins - a.wins; });
+  return out;
+}
+
+function luckWins(x) {
+  return (Math.round(x * 2) / 2).toString().replace('.5', '½');
+}
+
+function luckSigned(x, places) {
+  return (x >= 0 ? '+' : '−') + Math.abs(x).toFixed(places);
+}
+
+function renderLuck(force) {
+  var status = document.getElementById('luckstatus');
+  var host = document.getElementById('lucktable');
+  var mineHost = document.getElementById('luckmine');
+  document.getElementById('lucknote').innerHTML = luckMethodNote(null);
+  if (!LEAGUE || !LEAGUE.teams || !LEAGUE.teams.length) {
+    host.innerHTML = '<div class="empty">Import your league on the Roster tab and every '
+      + 'team’s schedule luck appears here.</div>';
+    mineHost.innerHTML = '';
+    document.getElementById('lucksource').textContent = '';
+    status.textContent = '';
+    return;
+  }
+  var key = leagueKey(LEAGUE);
+  if (!force && luckState.key === key && luckState.season) { paintLuck(); return; }
+  luckState.key = key;
+  luckState.season = null;
+  status.textContent = 'Loading…';
+  fetchLuckSeason(LEAGUE).then(function (season) {
+    if (luckState.key !== key) return;
+    luckState.season = season;
+    status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+    paintLuck();
+  }, function (err) {
+    if (luckState.key !== key) return;
+    err = err || {};
+    if (LEAGUE.platform === 'espn' && LEAGUE.season && LEAGUE.season.results) {
+      luckState.season = LEAGUE.season;
+      status.textContent = 'Private league — scores as of your paste, '
+        + new Date(LEAGUE.season.fetchedAt).toLocaleString();
+      paintLuck();
+      return;
+    }
+    mineHost.innerHTML = '';
+    host.innerHTML = '<div class="empty">'
+      + (LEAGUE.platform === 'espn'
+        ? (LEAGUE.season
+          ? 'Your last Fantasy Scores paste was taken before this tab existed and carries '
+            + 'no scores. Paste this week’s matchups there once more and this tab reads '
+            + 'every final score from it.'
+          : 'ESPN would not hand this league’s scores to the page — a private league '
+            + 'needs your login cookie. Paste this week’s matchups on the <b>Fantasy Scores'
+            + '</b> tab once; this tab reads every final score from that paste.')
+        : err.unsupported
+          ? 'This league was not imported from Sleeper or ESPN, so there are no scores '
+            + 'to read. Re-import it on the Roster tab.'
+          : 'Could not reach Sleeper (' + esc(String(err.message || err.status || err))
+            + '). Scores are fetched live, so this needs a working connection.')
+      + '</div>';
+    status.textContent = '';
+  });
+}
+
+function paintLuck() {
+  var season = luckState.season, host = document.getElementById('lucktable');
+  var mineHost = document.getElementById('luckmine');
+  document.getElementById('lucksource').textContent =
+    season.source === 'sleeper' ? 'Sleeper' : season.source === 'espn' ? 'ESPN' : 'ESPN paste';
+  var analysis = luckAnalyse(season);
+  document.getElementById('lucknote').innerHTML = luckMethodNote(season);
+  if (!analysis.weeks) {
+    host.innerHTML = '<div class="empty">No games are final yet.</div>';
+    mineHost.innerHTML = '';
+    return;
+  }
+  var mineId = myTeamId(), mine = mineId === null ? -1 : analysis.index[mineId];
+  if (mine === undefined) mine = -1;
+  mineHost.innerHTML = mine < 0
+    ? '<div class="empty">Pick your team on the Roster tab and this card follows it.</div>'
+    : luckMineCard(season, analysis, mine);
+  var order = analysis.rows.slice().sort(function (a, b) { return a.luck - b.luck; });
+  var html = '<div class="scroll"><table class="luck"><thead><tr><th class="l">Team</th>'
+    + '<th>Record</th><th title="Your score against every other team, every week">'
+    + 'All-play</th><th title="Wins a random schedule hands these scores, on average">'
+    + 'Expected wins</th><th title="Actual wins minus expected wins">Schedule luck</th>'
+    + '<th title="How often a random schedule gives these scores a record this far out, '
+    + 'in this direction">How rare</th><th>Points for</th><th>Points against</th>'
+    + '<th title="What opponents scored against this team, compared with what each of '
+    + 'them scored in his other weeks, summed">Opponents vs usual</th></tr></thead><tbody>';
+  for (var r = 0; r < order.length; r++) {
+    var row = order[r], tail = row.luck < 0 ? row.atMost : row.atLeast;
+    html += '<tr' + (row.team.id === mineId ? ' class="mine"' : '') + '>'
+      + '<td class="l">' + esc(row.team.name) + '</td>'
+      + '<td>' + luckWins(row.wins) + '–' + luckWins(row.weeks.length - row.wins) + '</td>'
+      + '<td>' + row.allW + '–' + row.allL + (row.allT ? '–' + row.allT : '') + '</td>'
+      + '<td>' + row.expected.toFixed(1) + '</td>'
+      + '<td class="' + (row.luck <= -0.5 ? 'unlucky' : row.luck >= 0.5 ? 'lucky' : '') + '">'
+      + luckSigned(row.luck, 1) + '</td>'
+      + '<td>' + (Math.abs(row.luck) < 0.5 ? '—' : luckOneIn(tail)) + '</td>'
+      + '<td>' + row.pf.toFixed(1) + '</td><td>' + row.pa.toFixed(1) + '</td>'
+      + '<td>' + luckSigned(row.oppOver, 1) + '</td></tr>';
+  }
+  host.innerHTML = html + '</tbody></table></div>'
+    + '<div class="note">Unluckiest first. <b>Schedule luck</b> is wins against what a '
+    + 'random schedule hands the same scores; <b>how rare</b> is the chance of a record '
+    + 'at least that far out in that direction. A negative <b>opponents vs usual</b> means '
+    + 'this team’s opponents played below their own average against it.</div>';
+}
+
+/* Your team, week by week and in sentences — every clause from a number on the card. */
+function luckMineCard(season, analysis, mine) {
+  var row = analysis.rows[mine], streak = luckStreak(row), text = '';
+  var name = esc(row.team.name), n = row.weeks.length;
+  text += '<p><b>' + name + '</b> is ' + luckWins(row.wins) + '–' + luckWins(n - row.wins)
+    + '. Your scores would have beaten ' + row.allW + ' of the ' + (row.allW + row.allL
+    + row.allT) + ' scores posted against the rest of the league, which a random schedule '
+    + 'turns into <b>' + row.expected.toFixed(1) + ' wins</b> on average — so the schedule '
+    + (Math.abs(row.luck) < 0.05 ? 'has cost you nothing.</p>'
+      : 'has ' + (row.luck < 0 ? 'cost' : 'given') + ' you <b>' + Math.abs(row.luck).toFixed(1)
+        + (Math.abs(row.luck).toFixed(1) === '1.0' ? ' win' : ' wins') + '</b>.</p>');
+  if (streak && streak.length >= 2) {
+    var first = row.weeks[streak.from].period, last = row.weeks[n - 1].period;
+    var word = streak.kind ? 'won' : 'lost';
+    text += '<p>You have ' + word + ' <b>' + streak.length + ' straight</b> (weeks ' + first
+      + '–' + last + '). With the scores you actually put up in those weeks, the chance of '
+      + (streak.kind ? 'winning' : 'losing') + ' all ' + streak.length + ' against random '
+      + 'opponents is <b>' + (streak.prob * 100).toFixed(1) + '%</b> — ' + luckOneIn(streak.prob)
+      + ', against ' + luckOneIn(streak.coin) + ' for a coin.';
+    /* Each game of the run in its own clause, sorted by what decided it: a score that
+       beat most of the league was the schedule, one near the bottom was the lineup, and
+       the middle is a coin. The cut points are definitions, not measurements. */
+    var clauses = [];
+    for (var s = streak.from; s < n; s++) {
+      var wk = row.weeks[s], margin = Math.abs(wk.pts - wk.foePts).toFixed(1);
+      var line = 'week ' + wk.period + ' your ' + wk.pts.toFixed(1) + ' beat ' + wk.beat
+        + ' of ' + wk.others;
+      var schedule = streak.kind ? wk.p <= 0.4 : wk.p >= 0.6;
+      var lineup = streak.kind ? wk.p >= 0.75 : wk.p <= 0.25;
+      clauses.push(line + (schedule ? ' — that one was the schedule'
+        : lineup ? (streak.kind ? ' — that one was earned' : ' — that one was the lineup, not the schedule')
+        : ' — a coin flip, ' + (streak.kind ? 'won' : 'lost') + ' by ' + margin));
+    }
+    text += ' Game by game: ' + clauses.join('; ') + '.</p>';
+  }
+  var tail = row.luck < 0 ? row.atMost : row.atLeast;
+  if (Math.abs(row.luck) >= 0.5) {
+    text += '<p>A record of ' + luckWins(row.wins) + ' or ' + (row.luck < 0 ? 'worse' : 'better')
+      + ' from these scores happens <b>' + luckOneIn(tail) + '</b> schedules.</p>';
+  }
+  var html = '<div class="lucktext">' + text + '</div>'
+    + '<div class="scroll"><table class="luck"><thead><tr><th>Week</th><th>You</th>'
+    + '<th>Rank</th><th class="l">Opponent</th><th>They scored</th>'
+    + '<th title="What that opponent scored in his other weeks, on average">Their usual'
+    + '</th><th>Result</th><th title="Share of the league your score beat that week — the '
+    + 'chance of winning against a random opponent">Win chance</th></tr></thead><tbody>';
+  for (var w = 0; w < n; w++) {
+    var week = row.weeks[w], foe = analysis.rows[analysis.index[week.foe]];
+    var cls = week.result === 0 && week.p >= 0.5 ? 'unlucky'
+      : week.result === 1 && week.p < 0.5 ? 'lucky' : '';
+    html += '<tr><td>' + week.period + '</td><td>' + week.pts.toFixed(1) + '</td>'
+      + '<td>' + ordinal(week.rank) + ' of ' + week.teams + '</td>'
+      + '<td class="l">' + esc(foe ? foe.team.name : leagueTeamName(week.foe)) + '</td>'
+      + '<td>' + week.foePts.toFixed(1) + '</td><td>' + week.foeUsual.toFixed(1) + '</td>'
+      + '<td class="' + cls + '">' + (week.result === 1 ? 'W' : week.result === 0 ? 'L' : 'T')
+      + ' ' + (week.pts - week.foePts >= 0 ? '+' : '−') + Math.abs(week.pts - week.foePts).toFixed(1)
+      + '</td><td>' + Math.round(week.p * 100) + '%</td></tr>';
+  }
+  html += '</tbody></table></div><div class="note">Results are tinted where the schedule '
+    + 'decided them: a loss with a score that beat most of the league, or a win with one '
+    + 'that did not.</div>';
+  var swaps = luckSwaps(season, analysis, mine);
+  html += '<h3 style="margin:16px 0 6px">Your scores on everyone else’s schedule</h3>'
+    + '<div class="scroll"><table class="luck"><thead><tr><th class="l">Schedule of</th>'
+    + '<th>Your record</th></tr></thead><tbody>';
+  for (var q = 0; q < swaps.length; q++) {
+    html += '<tr><td class="l">' + esc(swaps[q].name) + '</td><td>' + luckWins(swaps[q].wins)
+      + '–' + luckWins(swaps[q].games - swaps[q].wins) + '</td></tr>';
+  }
+  html += '</tbody></table></div><div class="note">Each week your score is played against '
+    + 'whoever that team faced; where they faced you, you face them.</div>';
+  return html;
+}
+
+function luckMethodNote(season) {
+  var text = '<b>What is counted as luck.</b> Only the schedule. Each week your score is '
+    + 'set against every other team’s score that week; the share you beat is your chance '
+    + 'of winning against an opponent drawn at random, and summed over the season it is '
+    + 'the wins a random schedule would have given you. Your own score is taken as it '
+    + 'was — a low score that lost is not bad luck, so a week in the bottom half counts '
+    + 'against you here exactly as it did on the scoreboard.<br><br>'
+    + '<b>How the odds are worked out.</b> Given the scores, each week is won or lost '
+    + 'independently with its own chance, so the chance of every possible record — and of '
+    + 'any run of results — is computed exactly, not simulated. Every input is the '
+    + 'platform’s official final score; nothing on this tab is a projection, and nothing '
+    + 'here feeds one.';
+  if (season && season.median) {
+    text += '<br><br>This league also plays every team against the median each week. '
+      + 'That game is already an all-play result, so only the head-to-head games are '
+      + 'graded here.';
+  }
   return text;
 }
 
@@ -11683,6 +12116,7 @@ function render() {
   /* Repaints from what is already fetched, so a scoring change rewrites the report. */
   if (currentView === 'report') renderReport(false);
   if (currentView === 'playoffs') renderPlayoffs(false);
+  if (currentView === 'luck') renderLuck(false);
   renderRoster();
   renderLeague();
   renderDraft();
@@ -11722,6 +12156,8 @@ document.addEventListener('click', function (event) {
     // Standings are fetched on open as well; the simulation is local and repaints from
     // what was fetched when the scoring panel changes.
     if (currentView === 'playoffs') renderPlayoffs(false);
+    // Luck reads the same final scores, fetched on open; the arithmetic is local.
+    if (currentView === 'luck') renderLuck(false);
     // Trades are computed on open for the same reason, but the cost is local: the
     // optimiser runs hundreds of times to grade a league's worth of swaps. The draft
     // tab's report card is the same trade-off — a league's worth of lineups.
@@ -11819,6 +12255,8 @@ document.addEventListener('click', function (event) {
     renderReport(true);
   } else if (target.id === 'refreshplayoffs') {
     renderPlayoffs(true);
+  } else if (target.id === 'refreshluck') {
+    renderLuck(true);
   } else if (target.id === 'matchpasteload') {
     var pasted = document.getElementById('matchpastejson').value.replace(/^\s+|\s+$/g, '');
     if (!pasted) setMatchPasteStatus('Nothing pasted yet.', 'warn');
