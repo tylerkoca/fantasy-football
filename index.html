@@ -262,6 +262,8 @@
   table.luck td.unlucky { color: #d0584c; font-weight: 600; }
   table.luck td.lucky { color: #3f9a5c; font-weight: 600; }
   .lucktext p { margin: 0 0 8px; line-height: 1.5; }
+  table.luck span.dim { color: var(--dim); font-size: 0.85em; }
+  table.luck td.why { min-width: 260px; white-space: normal; }
   td.pbar span { display: inline-block; min-width: 58px; padding: 1px 6px; border-radius: 4px;
     background: linear-gradient(90deg, color-mix(in srgb, var(--section) 30%, transparent)
       var(--p), transparent var(--p)); }
@@ -7108,6 +7110,7 @@ function playoffMethodNote(season, forecast) {
  * Displayed only: nothing here reaches a projection, a ranking or a lineup.
  * ------------------------------------------------------------------ */
 var luckState = { key: null, season: null };
+var LUCK_CLOSE = 10;
 
 /* Sleeper keeps no season-long schedule in one payload, so the finished weeks are read
    one /matchups call each — only when this tab opens. A median league's extra game is
@@ -7176,7 +7179,8 @@ function luckAnalyse(season) {
   var rows = [];
   for (i = 0; i < teams.length; i++) {
     rows.push({ team: teams[i], weeks: [], wins: 0, expected: 0, pf: 0, pa: 0,
-                oppOver: 0, allW: 0, allL: 0, allT: 0 });
+                oppOver: 0, allW: 0, allL: 0, allT: 0,
+                cheapWins: 0, robbedLosses: 0, closeW: 0, closeL: 0 });
   }
   var results = season.results || [];
   /* Each team's own scores, so an opponent's week can be set against his usual. */
@@ -7226,6 +7230,14 @@ function luckAnalyse(season) {
         row.allW += beat;
         row.allL += others - beat - tied;
         row.allT += tied;
+        /* Where a record parts from its scores: a win with a score most of the league
+           beat, a loss with one that beat most of the league. Close is under
+           LUCK_CLOSE points — a definition, printed in the note. */
+        if (result === 1 && p < 0.5) row.cheapWins++;
+        if (result === 0 && p > 0.5) row.robbedLosses++;
+        if (Math.abs(pts - foePts) < LUCK_CLOSE && result !== 0.5) {
+          if (result === 1) row.closeW++; else row.closeL++;
+        }
       }
     }
   }
@@ -7360,6 +7372,8 @@ function paintLuck() {
     ? '<div class="empty">Pick your team on the Roster tab and this card follows it.</div>'
     : luckMineCard(season, analysis, mine);
   var order = analysis.rows.slice().sort(function (a, b) { return a.luck - b.luck; });
+  var pfRank = luckRanks(analysis.rows, 'pf'), paRank = luckRanks(analysis.rows, 'pa');
+  var winRank = luckRanks(analysis.rows, 'wins');
   var html = '<div class="scroll"><table class="luck"><thead><tr><th class="l">Team</th>'
     + '<th>Record</th><th title="Your score against every other team, every week">'
     + 'All-play</th><th title="Wins a random schedule hands these scores, on average">'
@@ -7367,9 +7381,14 @@ function paintLuck() {
     + '<th title="How often a random schedule gives these scores a record this far out, '
     + 'in this direction">How rare</th><th>Points for</th><th>Points against</th>'
     + '<th title="What opponents scored against this team, compared with what each of '
-    + 'them scored in his other weeks, summed">Opponents vs usual</th></tr></thead><tbody>';
+    + 'them scored in his other weeks, summed">Opponents vs usual</th>'
+    + '<th title="Wins with a score that beat fewer than half the league that week">'
+    + 'Cheap wins</th><th title="Losses with a score that beat more than half the league '
+    + 'that week">Robbed</th><th title="Games decided by under ' + LUCK_CLOSE + ' points">'
+    + 'Close games</th><th class="l">Why</th></tr></thead><tbody>';
   for (var r = 0; r < order.length; r++) {
     var row = order[r], tail = row.luck < 0 ? row.atMost : row.atLeast;
+    var at = analysis.index[row.team.id];
     html += '<tr' + (row.team.id === mineId ? ' class="mine"' : '') + '>'
       + '<td class="l">' + esc(row.team.name) + '</td>'
       + '<td>' + luckWins(row.wins) + '–' + luckWins(row.weeks.length - row.wins) + '</td>'
@@ -7378,14 +7397,64 @@ function paintLuck() {
       + '<td class="' + (row.luck <= -0.5 ? 'unlucky' : row.luck >= 0.5 ? 'lucky' : '') + '">'
       + luckSigned(row.luck, 1) + '</td>'
       + '<td>' + (Math.abs(row.luck) < 0.5 ? '—' : luckOneIn(tail)) + '</td>'
-      + '<td>' + row.pf.toFixed(1) + '</td><td>' + row.pa.toFixed(1) + '</td>'
-      + '<td>' + luckSigned(row.oppOver, 1) + '</td></tr>';
+      + '<td>' + row.pf.toFixed(1) + ' <span class="dim">' + ordinal(pfRank[at]) + '</span></td>'
+      + '<td>' + row.pa.toFixed(1) + ' <span class="dim">' + ordinal(paRank[at]) + '</span></td>'
+      + '<td>' + luckSigned(row.oppOver, 1) + '</td>'
+      + '<td>' + row.cheapWins + '</td><td>' + row.robbedLosses + '</td>'
+      + '<td>' + row.closeW + '–' + row.closeL + '</td>'
+      + '<td class="l why">' + luckWhy(row, pfRank[at], paRank[at], winRank[at],
+                                         analysis.rows.length) + '</td></tr>';
   }
   host.innerHTML = html + '</tbody></table></div>'
     + '<div class="note">Unluckiest first. <b>Schedule luck</b> is wins against what a '
     + 'random schedule hands the same scores; <b>how rare</b> is the chance of a record '
-    + 'at least that far out in that direction. A negative <b>opponents vs usual</b> means '
-    + 'this team’s opponents played below their own average against it.</div>';
+    + 'at least that far out in that direction. Points ranks are 1st for the most, so 1st '
+    + 'in points against is the team that has faced the most. A negative <b>opponents vs '
+    + 'usual</b> means this team’s opponents played below their own average against it. '
+    + 'A <b>cheap win</b> came with a score that beat fewer than half the league that week, '
+    + 'and a <b>robbed</b> loss with one that beat more than half; a <b>close game</b> was '
+    + 'decided by under ' + LUCK_CLOSE + ' points.</div>';
+}
+
+/* 1 for the highest; ties share the better rank. */
+function luckRanks(rows, field) {
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var rank = 1;
+    for (var j = 0; j < rows.length; j++) if (rows[j][field] > rows[i][field]) rank++;
+    out.push(rank);
+  }
+  return out;
+}
+
+/* The two or three facts that most explain the gap between a record and its scores,
+   each one a number in the same row. Nothing is said that the columns do not show. */
+function luckWhy(row, pf, pa, standing, teams) {
+  var bits = [], luck = row.luck;
+  if (Math.abs(pf - standing) >= 3) {
+    bits.push(ordinal(pf) + ' in points but ' + ordinal(standing) + ' in wins');
+  }
+  if (luck < 0 && row.robbedLosses) {
+    bits.push('lost ' + row.robbedLosses + ' with a top-half score');
+  }
+  if (luck > 0 && row.cheapWins) {
+    bits.push('won ' + row.cheapWins + ' with a bottom-half score');
+  }
+  if (Math.abs(row.oppOver) >= 20) {
+    bits.push('opponents scored ' + Math.round(Math.abs(row.oppOver)) + ' '
+      + (row.oppOver > 0 ? 'above' : 'below') + ' their usual against them');
+  } else if (pa <= 2 || pa >= teams - 1) {
+    bits.push(pa <= 2 ? 'faced the ' + (pa === 1 ? 'most' : '2nd-most') + ' points'
+      : 'faced the ' + (pa === teams ? 'fewest' : '2nd-fewest') + ' points');
+  }
+  if (row.closeW + row.closeL >= 2 && Math.abs(row.closeW - row.closeL) >= 2) {
+    bits.push(row.closeW + '–' + row.closeL + ' in close games');
+  }
+  if (!bits.length) {
+    return Math.abs(luck) < 0.5 ? 'record about matches the scores' : '';
+  }
+  var text = bits.join('; ');
+  return text.charAt(0).toUpperCase() + text.slice(1) + '.';
 }
 
 /* Your team, week by week and in sentences — every clause from a number on the card. */
