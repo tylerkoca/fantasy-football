@@ -651,19 +651,6 @@
   .swrow .chip { margin-right: 0; }
   .gradecell { font-weight: 800; letter-spacing: -.3px; }
 
-  /* Both sides of a market, stacked so the column stays narrow. Tabular figures keep
-     the two prices aligned under each other, and the cell inherits the table's right
-     alignment like every other number in the row.
-
-     THIS CLASS WAS CALLED `.odds`, which is also the bust/boom component 150 lines up,
-     and that rule sets `display: flex; align-items: center`. Same name, two unrelated
-     components, so the price cell silently became a flex container: its content packed
-     to the cell's LEFT edge while every neighbouring figure sat right, and centring the
-     flex item pulled the pair off the line number's baseline as well. Nothing errored —
-     it just looked wrong, which is the `var HIST` failure mode in CSS. Do not reuse a
-     class name across two components here. */
-  td.price { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
-             line-height: 1.35; white-space: nowrap; text-align: right; }
   /* Workload: opportunity, in the same tabular figures as the projections beside it. */
   .usage { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums;
            white-space: nowrap; }
@@ -1081,26 +1068,6 @@
   </section>
 
   <section class="view" id="view-season" hidden>
-    <div class="card">
-      <h2>Season outlook vs the sportsbook
-        <span class="tag">not in the projections</span></h2>
-      <div class="row" style="margin-bottom:10px">
-        <div>
-          <label for="seasonpos">Position</label>
-          <select id="seasonpos">
-            <option>QB</option><option selected>RB</option>
-            <option>WR</option><option>TE</option>
-          </select>
-        </div>
-        <div>
-          <label for="seasonstat">Market</label>
-          <select id="seasonstat"></select>
-        </div>
-      </div>
-      <div class="scroll" id="linesTable"></div>
-      <div class="note" id="linesNote"></div>
-    </div>
-
     <div class="card">
       <h2>Pass-catching backs</h2>
       <div class="scroll" id="catchingBacks"></div>
@@ -1545,6 +1512,10 @@ function expand(data) {
             week.sources = used;
           } else week[field] = src[f];
         }
+        /* The week's own number, so a test that depends on WHICH week this is —
+           `unavailable()` — can ask the object it is handed rather than every caller
+           having to thread a key through beside it. */
+        week.n = +wk;
         weeks[wk] = week;
       }
       player.weeks = weeks;
@@ -1860,7 +1831,7 @@ function optimize(entries, force) {
          reason — the bye ends. Excluding him here rather than at every call site means
          the lineup, the waiver gains and the trade grades all agree by construction. */
       var ok = i < n && j < m && eligible(slots[i], entries[j].position)
-               && !entries[j].week.is_bye && !unavailable(entries[j].player);
+               && !entries[j].week.is_bye && !unavailable(entries[j].player, entries[j].week);
       row.push(ok ? -(entries[j].points
                       + (force && force[entries[j].player.gsis_id] ? LOCK_BONUS : 0)) : 0);
     }
@@ -1873,7 +1844,7 @@ function optimize(entries, force) {
     var entry = (pick >= 0 && pick < m
                  && eligible(slots[i], entries[pick].position)
                  && !entries[pick].week.is_bye
-                 && !unavailable(entries[pick].player)) ? entries[pick] : null;
+                 && !unavailable(entries[pick].player, entries[pick].week)) ? entries[pick] : null;
     if (entry) used[entry.player.gsis_id] = true;
     lineup.push({ slot: slots[i], entry: entry });
   }
@@ -1926,7 +1897,7 @@ function lockControl(entry, locks, starting) {
     return '<button class="lockbtn" data-lock="out" data-lockid="' + id + '" '
       + 'title="Bench him this week; the next best fills his slot">bench</button>';
   }
-  if (entry.week.is_bye || unavailable(entry.player)) return '';
+  if (entry.week.is_bye || unavailable(entry.player, entry.week)) return '';
   return '<button class="lockbtn" data-lock="in" data-lockid="' + id + '" '
     + 'title="Start him this week; the lineup is rebuilt around him">start</button>';
 }
@@ -2051,7 +2022,7 @@ function renderSetLineup() {
 
 /* The same test `optimize` applies: a starter on bye or ruled out scores nothing,
    whatever his projection says, so the set lineup is priced the way it will score. */
-function cannotPlay(entry) { return !!(entry.week.is_bye || unavailable(entry.player)); }
+function cannotPlay(entry) { return !!(entry.week.is_bye || unavailable(entry.player, entry.week)); }
 
 function setDiffList(rows) {
   if (!rows.length) return '<div class="row-pt"><span>—</span></div>';
@@ -2060,7 +2031,7 @@ function setDiffList(rows) {
     /* A starter who cannot play is the one thing on this card worth shouting about:
        it is a zero you can still fix before kickoff. */
     var flag = rows[r].week.is_bye ? ' <span class="tag bad">bye</span>'
-      : unavailable(rows[r].player) ? ' <span class="tag bad">out</span>' : '';
+      : unavailable(rows[r].player, rows[r].week) ? ' <span class="tag bad">out</span>' : '';
     out += '<div class="row-pt"><span>' + chip(rows[r].player.position)
       + esc(rows[r].player.name) + flag + '</span><b>'
       + (cannotPlay(rows[r]) ? 0 : rows[r].points).toFixed(1) + '</b></div>';
@@ -2378,9 +2349,24 @@ function injuryFlag(player) {
     + esc(inj.status) + (hard ? '' : part) + '</span>';
 }
 
-/* Does this man count as startable at all? Only a HARD status removes him. */
-function unavailable(player) {
-  return !!(player && player.injury && player.injury.severity === 'hard');
+/* Does this man count as startable IN THIS WEEK? Only a HARD status removes him, and
+   only for the weeks it is about. The status is TODAY’S report, and for half a season
+   it was applied to every week: a receiver ruled "Out" for one game sat out of every
+   optimal lineup, waiver gain and playoff forecast through week 18. Mirrors
+   build._injury_from_sleeper — edit them together:
+     * a week already played: never (today’s report says nothing about it);
+     * the live week: any hard status;
+     * a later week: only a LIST status — IR, PUP, NFI, suspended, did not report —
+       because "Out" is one game’s designation and those last for weeks.
+   With no week (a caller describing the player today) it answers for the live week. */
+var LIST_STATUSES = { IR: 1, PUP: 1, NFI: 1, Sus: 1, DNR: 1 };
+function unavailable(player, week) {
+  var inj = player && player.injury;
+  if (!inj || inj.severity !== 'hard') return false;
+  var live = +DATA.current_week || 0, n = week && week.n;
+  if (!n || !live || n === live) return true;
+  if (n < live) return false;
+  return !!LIST_STATUSES[inj.status];
 }
 
 /* DOES ANY MARKET SOURCE PRICE HIM? `sources` holds our own model plus whichever of
@@ -4203,399 +4189,11 @@ function renderWeeklyRankings() {
        ? 'Teammate-absence lift ' + esc(FACTS.teammate_absence_note) + '.' : '');
 }
 
-/* ------------------------------------------------------------------ *
- * Season betting lines.
- *
- * A sportsbook's number for the whole season, which is the question a drafter is
- * actually asking and the one a weekly projection hides. Shown, never used: nothing
- * here feeds a projection, a ranking or the optimizer.
- *
- * The two percentages are the point. The book's is de-vigged, so it is what the book
- * really thinks rather than what it charges. Ours is read off the model's own measured
- * season-total error — see lines.py — which is why it sits near 50% so often. A season
- * total is one number carrying every injury and role change in it, and pretending to
- * 85% confidence about one would be a lie the model cannot back.
- * ------------------------------------------------------------------ */
+/* Season-long sportsbook lines (facts.lines). The Season Insights card that showed them
+   was removed on request; other tabs still read LINES, and DEPART feeds the
+   departures commentary. */
 var LINES = (DATA.facts && DATA.facts.lines) || {};
-
-var LINE_STATS = {
-  QB: [['pass_yd', 'Passing yards'], ['pass_td', 'Passing TDs'],
-       ['rush_yd', 'Rushing yards']],
-  RB: [['rush_yd', 'Rushing yards'], ['rec_yd', 'Receiving yards'],
-       ['rec', 'Receptions'], ['rush_td', 'Rushing TDs']],
-  WR: [['rec_yd', 'Receiving yards'], ['rec', 'Receptions'],
-       ['rec_td', 'Receiving TDs']],
-  TE: [['rec_yd', 'Receiving yards'], ['rec', 'Receptions'],
-       ['rec_td', 'Receiving TDs']]
-};
-
-/* Why we land where we land, in sentences, from numbers already on the row.
-   Every clause traces to something measured: last season's actual, the games we expect
-   him to play, how his offence projects against what that offence really did, and
-   whether he moved. No scouting opinions — nothing here knows about a new coordinator
-   or a rebuilt line, and inventing one would poison the clauses that are real. */
-var OUTLOOK = (DATA.facts && DATA.facts.outlook) || {};
-var HEALTHY = (DATA.facts && DATA.facts.healthy) || {};
-var TRENCH = (DATA.facts && DATA.facts.trenches) || {};
 var DEPART = (DATA.facts && DATA.facts.departures) || {};
-
-/* The verdict compares two probabilities, so the band is in probability too. Read from
-   the payload rather than written here, so it stays the number lines.py actually used
-   to compute the sensitivity this panel prints. */
-function leanBand() {
-  var band = DATA.facts && DATA.facts.lines_lean_band;
-  return (typeof band === 'number' && band > 0) ? band : 0.08;
-}
-
-/* American odds, with the sign the book prints. */
-function oddsText(n) {
-  if (n === null || n === undefined) return '—';
-  return (n > 0 ? '+' : '') + n;
-}
-
-function oddsPair(e) {
-  if (e.over === null && e.under === null) return '<span class="slot">—</span>';
-  return 'o ' + oddsText(e.over) + '<br>u ' + oddsText(e.under);
-}
-
-function pctText(p) {
-  if (p === null || p === undefined) return '<span class="slot">—</span>';
-  return Math.round(p * 100) + '%';
-}
-
-/* Yardage markets are hundreds, touchdown markets are single digits — rounding both
-   the same way prints either "115.0 yards" or a meaningless "1 touchdowns". */
-function fmtGap(n) {
-  return n >= 10 ? String(Math.round(n)) : n.toFixed(1);
-}
-
-/* A per-game rate, with the precision the quantity deserves. Yards a game round
-   fine; touchdowns a game do not — rounding 1.4 to "1" turned the full-strength
-   split into "managed 1 rushing tds a game, and 1 in the games he did not", which
-   states a difference and then hides it. */
-function perGame(n) {
-  if (n === null || n === undefined) return '—';
-  return Math.abs(n) >= 10 ? String(Math.round(n)) : n.toFixed(1);
-}
-
-/* WHY THE VERDICT CAME OUT THAT WAY.
-   The table shows points and the verdict is computed from probabilities, which makes
-   the column look arbitrary — a big gap can read "line looks right" while a small one
-   reads UNDER. Three separate things cause that, and this names whichever one is doing
-   the work on this row rather than leaving the reader to guess. */
-function leanCommentary(e, unit) {
-  if (e.p === null || e.p === undefined || e.book === null || e.book === undefined) {
-    return null;
-  }
-  var band = leanBand();
-  var edge = e.p - e.book;
-  var fired = Math.abs(edge) >= band;
-  var bookPct = Math.round(e.book * 100), ourPct = Math.round(e.p * 100);
-  var out = 'The book prices the over at <b>' + bookPct + '%</b> once its margin is '
-    + 'stripped out; our error distribution puts it at <b>' + ourPct + '%</b>. That '
-    + Math.round(Math.abs(edge) * 100) + '-point difference is '
-    + (fired ? 'past' : 'inside') + ' the ' + Math.round(band * 100)
-    + '-point band, so it reads as ' + (fired ? 'a lean.' : 'agreement.');
-
-  /* The price, not the number. A market priced away from even money means we can sit
-     on top of the line and still disagree with the bet — the single most confusing
-     row in this table, and previously nothing on screen explained it. */
-  if (e.ours !== null && e.ours !== undefined && e.line > 0) {
-    var pointGap = Math.abs(e.ours - e.line) / e.line;
-    if (fired && pointGap < 0.03) {
-      out += ' Note our total ' + (Math.round(pointGap * 100) < 1
-          ? 'sits essentially on the line'
-          : 'is within ' + Math.round(pointGap * 100) + '% of the line')
-        + ' — the disagreement here is with the <b>price</b>, not the number. '
-        + 'The book is asking ' + bookPct + '% for a market we make closer to a '
-        + 'coin flip.';
-    } else if (!fired && e.w && pointGap >= 0.05) {
-      /* The distribution is wide. Say how wide, in the units on screen — the point
-         figure comes from lines.py, measured against the raw projection the ratio
-         distribution is defined on rather than re-derived from the line here. */
-      out += ' A gap that size looks large, but season ' + unit + ' swing enough that '
-        + 'the two numbers have to be about <b>' + Math.round(e.w * 100) + '% apart</b>'
-        + (e.wp ? ' (roughly ' + fmtGap(e.wp) + ' ' + unit + ')' : '')
-        + ' before the probability moves the ' + Math.round(band * 100) + ' points that '
-        + 'would make it a lean.';
-    }
-  }
-  return out;
-}
-
-function lineCommentary(player, stat, unit, e) {
-  var bits = [];
-
-  /* ROLE CHANGE, STATED FIRST, because it invalidates everything after it.
-     This panel projects from our own model, which reads a player's own history — so a
-     man who was a backup last season is projected as one, however plainly he has the
-     job now. Sleeper and ESPN do know, and when their blended view of him runs far
-     above ours that disagreement IS the signal. Saying so is the honest move: the
-     alternative was a row quietly claiming a starting quarterback throws for 102 yards
-     a game. */
-  if (e.role && e.role >= 1.2) {
-    bits.push('<b class="tag bad">role change</b> <b>Treat this row with suspicion.</b> '
-      + 'Our season model projects from this player’s own history, and his history is '
-      + 'of a smaller job — the market sources rate him <b>'
-      + Math.round((e.role - 1) * 100) + '% higher</b> per game than we do, which is '
-      + 'them knowing about a promotion our history cannot see. The weekly projections '
-      + 'on the other tabs blend all three and already reflect it; this season number '
-      + 'does not, because its error calibration is fitted against our own model alone.');
-  }
-
-  if (e.waspg !== undefined && e.was !== undefined) {
-    bits.push('Last season ' + e.was.toFixed(0) + ' ' + unit + ' in ' + e.wasg
-      + ' games (' + e.waspg.toFixed(1) + ' a game).');
-  } else {
-    bits.push('No ' + unit + ' on record last season — rookie, hurt, or a different '
-      + 'role.');
-  }
-
-  if (e.pg !== null && e.games) {
-    bits.push('We expect <b>' + e.pg.toFixed(1) + ' a game</b> over ' + e.games.toFixed(1)
-      + ' games — a starter misses two or three, and the line is a season total, so '
-      + 'those count. That is ' + e.ours.toFixed(0) + ' for the year.');
-    /* SPLIT THE DISAGREEMENT INTO ITS TWO HALVES.
-       Nearly every row on this panel sits under the line, and from the numbers on
-       screen there is no way to tell whether we think the player is worse per game or
-       simply expect him to play less. Those call for opposite reactions, and the
-       second is usually the whole story: at the same per-game rate, the difference
-       between 14 games and 17 is 20% of a season total. Dividing the book's line by
-       our own per-game rate says what games count the book must be assuming, so the
-       reader can see which half of the disagreement is doing the work. */
-    var impliedGames = e.line / e.pg;
-    if (impliedGames > 0) {
-      bits.push(impliedGames > 17.5
-        ? 'Note the book is at ' + e.line.toFixed(0) + ', which our per-game rate could '
-          + 'not reach in a <b>perfect 17-game season</b> — so this gap is about the '
-          + 'rate, not about games missed. We think he is worse per game than the '
-          + 'market does.'
-        : 'At our per-game rate the book’s ' + e.line.toFixed(0) + ' needs <b>'
-          + impliedGames.toFixed(1) + ' games</b>, against the ' + e.games.toFixed(1)
-          + ' we project'
-          + (impliedGames - e.games > 1.5
-              ? ' — so most of this gap is the games estimate rather than a '
-                + 'disagreement about the player. Our figure regresses him toward what '
-                + 'his position actually plays, injuries and lost jobs included; the '
-                + 'book is pricing closer to a full season.'
-              : ', so the two are close and the disagreement is about the player '
-                + 'himself.'));
-    }
-  }
-
-  if (e.waspg !== undefined && e.pg !== null && e.waspg > 0) {
-    var shift = e.pg / e.waspg - 1;
-    if (Math.abs(shift) >= 0.08) {
-      bits.push('That is ' + Math.round(Math.abs(shift) * 100) + '% '
-        + (shift > 0 ? 'more' : 'less') + ' per game than last year.');
-    }
-  }
-
-  /* The lean paragraph is deliberately NOT pushed here any more. It restated the Book %
-     / Our % / Lean columns in prose, and reprinting them directly under the row they
-     were removed from would put back exactly what was taken out. `leanCommentary` is
-     kept rather than deleted because the measurement behind it is real and the panel
-     note still refers to the band; nothing calls it. */
-
-  /* WHO WAS ACTUALLY ON THE FIELD, before any claim about the offence.
-     Reading last season's total as a fact about the offence is how this got Baltimore
-     backwards: they threw for less because Lamar Jackson missed four games, and the
-     baseline quietly blamed the offence for it. The split is stated first so the
-     trend that follows is understood against the right number. */
-  var split = (HEALTHY[player.team] || {})[stat];
-  if (split && split.short !== null && split.missed >= 3) {
-    var gap = split.full - split.short;
-    if (Math.abs(gap) / Math.max(split.full, 1) >= 0.1) {
-      bits.push('<b>Read last season carefully.</b> ' + esc(player.team) + ' managed '
-        + perGame(split.full) + ' ' + unit + ' a game in the ' + split.played
-        + ' games ' + esc(split.qb || split.who) + ' played, and '
-        + perGame(split.short) + ' in the ' + split.missed + ' he did not — so the '
-        + 'raw season total understates what this offence does at full strength.');
-    }
-  }
-
-  /* Relative, not absolute — see lines.team_outlook. Every rostered backup carries a
-     projection that assumes he plays, so the raw team total is inflated for all 32
-     teams alike; only the comparison between them survives that. The baseline is now
-     the full-strength rate, so this is no longer a proxy for who got hurt. */
-  var team = (OUTLOOK[player.team] || {})[stat];
-  if (team !== undefined && Math.abs(team - 1) >= 0.06) {
-    bits.push('Against what they did at full strength last season, the '
-      + esc(player.team) + ' ' + unit + ' game is trending '
-      + (team > 1 ? 'up' : 'down') + ' by ' + Math.round(Math.abs(team - 1) * 100)
-      + '% more than the average team, so there is '
-      + (team > 1 ? 'more' : 'less') + ' to go round.');
-  }
-
-  /* WHO LEFT. The projection is built from the workload this player earned while
-     sharing a backfield, and nothing in it knows a teammate has gone. Named here with
-     the measured size attached, because the effect is real, monotone and small, and
-     the honest thing is to show the move and the number together rather than let the
-     move imply more than it delivers. */
-  var gone = (DEPART.vacated || {})[player.team];
-  if (gone && gone.left && gone.left.length) {
-    var who = [];
-    for (var gi = 0; gi < gone.left.length && gi < 3; gi++) {
-      var L = gone.left[gi];
-      var took = (stat.indexOf('rush') === 0)
-        ? (L.att >= 20 ? L.att + ' carries' : null)
-        : (L.tgt >= 15 ? L.tgt + ' targets' : null);
-      if (took) who.push(esc(L.name) + ' (' + took
-        + (L.to ? ', to ' + esc(L.to) : ', not on a roster') + ')');
-    }
-    if (who.length) {
-      var isRush = stat.indexOf('rush') === 0;
-      var pct = Math.round((isRush ? gone.carries : gone.targets) * 100);
-      bits.push('<b>Gone from ' + esc(player.team) + ':</b> ' + who.join(', ')
-        + '. That is ' + pct + '% of last season’s '
-        + (isRush ? 'carries' : 'targets') + ' vacated'
-        + (isRush
-          ? '. Measured 2020–2025, a back on a team that lost half its carries '
-            + 'gains about a carry a game on one whose backfield came back intact '
-            + '(+1.08 per 100% vacated) — real and monotone, but worth only a few '
-            + 'yards a game, so it is shown rather than added to the projection.'
-          : '. Measured 2020–2025 this predicts nothing for receivers who stay '
-            + '(r = −0.03, and the wrong sign), so it is not applied — a '
-            + 'departing receiver does not hand his looks to the man beside him.'));
-    }
-  }
-
-  /* The offensive line, with its measured size attached. It is small — 2.1 yards a
-     game for the rebuild, 2.4 for health — and saying so is the point: the narrative
-     around lines is far larger than the effect. */
-  /* Rushing YARDS only. The offensive-line study measured yards per game and nothing
-     else, so printing "worth about two rushing yards a game" underneath a rushing
-     TOUCHDOWN line was answering a question nobody asked — the reader is looking at a
-     TD market and the sentence talks about yardage. There is no measured line-to-
-     touchdown effect to substitute, and inventing one would be worse than the silence. */
-  if (stat === 'rush_yd') {
-    var line = (TRENCH.teams || {})[player.team];
-    if (line) {
-      var pieces = [];
-      if (line.upgrade !== undefined && Math.abs(line.upgrade) >= 0.6) {
-        pieces.push('added ' + (line.upgrade > 0 ? '' : 'lost ')
-          + Math.abs(line.upgrade).toFixed(1) + ' starting linemen'
-          + (line.upgrade > 0 ? ' worth of experience' : ''));
-      }
-      if (line.available !== undefined && line.available <= 0.8) {
-        pieces.push('their five main linemen were available for only '
-          + Math.round(line.available * 100) + '% of games last year');
-      }
-      if (pieces.length) {
-        bits.push('<b>Up front:</b> ' + pieces.join(', ') + '. Measured across '
-          + '2019–2025 that is worth about two rushing yards a game — real, and far '
-          + 'smaller than the way people talk about it.');
-      }
-    }
-  }
-
-  var moved = (CTX.moved || {})[player.gsis_id];
-  if (moved) {
-    bits.push('New team (' + esc(moved.from) + ' to ' + esc(moved.to)
-      + '), which measures at about a point a game <i>down</i>, not up.');
-  }
-  var qb = (CTX.qbs || {})[player.team];
-  if (qb && player.position !== 'QB') {
-    bits.push('New quarterback (' + esc(qb.from) + ' to ' + esc(qb.to)
-      + ') — shown because you want to know, but it moves nothing: measured, a '
-      + 'quarterback change predicts neither direction.');
-  }
-  return bits.join(' ');
-}
-
-function renderLines() {
-  var position = document.getElementById('seasonpos').value;
-  var wanted = LINE_STATS[position] || [];
-  var host = document.getElementById('linesTable');
-  var note = document.getElementById('linesNote');
-
-  /* The market picker follows the position, because the markets differ: a quarterback
-     has no receptions line and a receiver has no passing one. */
-  var picker = document.getElementById('seasonstat');
-  var options = '';
-  for (var w = 0; w < wanted.length; w++) {
-    options += '<option value="' + wanted[w][0] + '">' + wanted[w][1] + '</option>';
-  }
-  if (picker.getAttribute('data-for') !== position) {
-    picker.innerHTML = options;
-    picker.setAttribute('data-for', position);
-  }
-  var stat = picker.value || (wanted[0] && wanted[0][0]);
-  var label = '';
-  for (var k = 0; k < wanted.length; k++) if (wanted[k][0] === stat) label = wanted[k][1];
-  var unit = label.toLowerCase();
-
-  var rows = [];
-  for (var i = 0; i < PLAYERS.length; i++) {
-    var p = PLAYERS[i];
-    if (p.position !== position) continue;
-    var entry = (LINES[p.gsis_id] || {})[stat];
-    if (entry) rows.push({ p: p, e: entry });
-  }
-  if (!rows.length) {
-    /* After kickoff the books take season-long markets down, and "not posted yet" would
-       promise lines that are not coming until next summer. */
-    host.innerHTML = (DATA.facts || {}).lines_status === 'closed'
-      ? '<div class="empty">Season-long markets closed when the season kicked off — books '
-        + 'take them down once games are played, so there are no lines to compare against '
-        + 'until they reopen next summer.</div>'
-      : '<div class="empty">No ' + esc(unit) + ' lines posted for '
-        + esc(position) + ' yet. Books put season markets up through the summer.</div>';
-    note.textContent = '';
-    return;
-  }
-  rows.sort(function (a, b) { return b.e.line - a.e.line; });
-
-  /* The two implied-probability columns and the lean verdict were removed on request.
-     What is left is the comparison anyone actually wants — what the book posted against
-     what we project — and the per-row note underneath still explains the gap. Nothing
-     downstream reads them; `leanBand` and `pctText` stay because the note and
-     `leanCommentary` still cite the band. */
-  var html = '<table><thead><tr><th class="l">Player</th><th>Sportsbook line</th>'
-    + '<th>Price</th><th>We project</th><th>Per game</th>'
-    + '</tr></thead><tbody>';
-  for (var r = 0; r < rows.length; r++) {
-    var row = rows[r], e = row.e;
-    html += '<tr class="nb"><td class="l who"' + teamStyle(row.p.team) + '>'
-      + avatar(row.p) + chip(row.p.position) + esc(row.p.name) + ' '
-      + teamBadge(row.p.team) + '</td>'
-      + '<td><b>' + e.line.toFixed(1) + '</b></td>'
-      + '<td class="price">' + oddsPair(e) + '</td>'
-      + '<td>' + (e.ours === null ? '—' : e.ours.toFixed(0)) + '</td>'
-      + '<td>' + (e.pg === null ? '—' : e.pg.toFixed(1)) + '</td></tr>'
-      + '<tr class="why"><td colspan="5" class="l">'
-      + lineCommentary(row.p, stat, unit, e) + '</td></tr>';
-  }
-  host.innerHTML = html + '</tbody></table>';
-  note.innerHTML = esc((DATA.facts && DATA.facts.lines_note) || '')
-    + '<br><br><b>A gap between the line and our number is not a disagreement worth '
-    + 'acting on.</b> Season totals regress at very different widths — rushing '
-    + 'touchdowns run from 0.62 to 1.24 of projection across the middle half of '
-    + 'seasons, where passing yards barely move — so 100 yards is nothing on a '
-    + '4,300-yard passing line and a great deal on a 700-yard rushing one. Read each '
-    + 'row’s note for what is driving its number rather than the size of the gap.'
-    + '<br><br><b>We land under the line nearly every time, and here is the check on '
-    + 'that.</b> Rather than argue about it, take running backs who finished a season '
-    + 'in a given tier and look at what they actually rushed for the NEXT year — which '
-    + 'is what an over/under settles on, injuries and lost jobs included. Measured '
-    + '2020–2025 against a 1,200-yard line: backs coming off a <b>top-three</b> season '
-    + 'went over just <b>17%</b> of the time (median 926 yards), top-five 20% '
-    + '(median 906), top-twelve 24% (median 922). Even the best backs in football clear '
-    + 'that number about one year in six, so a projection near 950–1,000 sits close to '
-    + 'the historical middle and a line near 1,200 sits around its 75th percentile.'
-    + '<br><br><b>That still is not an edge, and should not be read as one.</b> Books '
-    + 'shade season-long player props toward the over because that is where casual '
-    + 'money goes; the line is set where the money balances, not where the median '
-    + 'outcome sits. So part of this gap is the market doing its job rather than us '
-    + 'finding something. Two things on our side are known and priced in: season totals '
-    + 'multiply by the games a player should actually play (a starting back averages 13 '
-    + 'of 17, not 17), and per-game rates run about 10% high for stars, which the '
-    + 'calibration removes. For contrast, adding up '
-    + 'Sleeper’s weekly projections lands 14–16% <i>above</i> these lines — '
-    + 'but only because each of those weeks assumes he plays, so the total describes a '
-    + 'player who never misses a game. This panel is for interest. It is not advice, '
-    + 'and it is not in your projections.';
-}
 
 /* Season receiving work for every back, summed from the weekly projections already in
    the payload. No new data needed — the numbers were always there, just never added up
@@ -5907,7 +5505,7 @@ function sideModel(side, data, clocks) {
 
     /* A manager who starts a man ruled out gets nothing from him, whatever he was once
        projected for — the same test the optimiser applies. */
-    var projected = (!bye && !unavailable(p)) ? score(w.stats) : 0;
+    var projected = (!bye && !unavailable(p, w)) ? score(w.stats) : 0;
     row.projected = projected;
     var spec = projected > 0 && elapsed < 60
       ? remainingGrids(p.position, projected, elapsed, row.points) : null;
@@ -5929,7 +5527,7 @@ function sideModel(side, data, clocks) {
     for (i = 0; i < side.starters.length; i++) {
       var later = side.starters[i].pid ? BY_ID[side.starters[i].pid] : null;
       var lw = later && later.weeks[side.laterWeeks[l]];
-      if (!lw || lw.is_bye || unavailable(later)) continue;
+      if (!lw || lw.is_bye || unavailable(later, lw)) continue;
       var lp = score(lw.stats), ls = lp > 0 ? remainingGrids(later.position, lp, 0, 0) : null;
       if (ls) { parts.push({ projected: lp, spec: ls }); projFinal += lp * remainingMean(ls); }
     }
@@ -8560,7 +8158,7 @@ function reportNext(player, ctx) {
   if (w.is_bye) return '<b>Week ' + nw + ':</b> on bye.';
   var proj = score(w.stats), where = (w.is_home ? 'vs ' : '@ ') + esc(w.opponent);
   var text = '<b>Week ' + nw + ':</b> ' + where + ', projected ' + proj.toFixed(1) + '.';
-  if (unavailable(player)) return text + ' Currently ' + esc(player.injury.status) + '.';
+  if (unavailable(player, w)) return text + ' Currently ' + esc(player.injury.status) + '.';
   var plan = ctx.nextPlan;
   if (!plan || state.roster.indexOf(player.gsis_id) < 0) return text;
   var i, best = null;
@@ -9549,7 +9147,7 @@ function wireEntries(weeks, index) {
     var ladder = wireLadder(TRADE_POSITIONS[i], weeks);
     for (var j = 0; j < ladder.length; j++) {
       var entry = entryFor(ladder[j], key);
-      if (!entry || entry.week.is_bye || unavailable(entry.player)) continue;
+      if (!entry || entry.week.is_bye || unavailable(entry.player, entry.week)) continue;
       out.push(entry);
     }
   }
@@ -12144,7 +11742,7 @@ function sourceSummary(weights) {
    two values — so they are set in one place instead of hovering above all eight tabs.
 
    On Season Insights and Draft the bar was not merely redundant, it was misleading:
-   traced through the entire call closure of renderLines, renderCatchingBacks,
+   traced through the entire call closure of renderCatchingBacks,
    renderDraft and renderPositionalRoi, not one of them touches state.week or score(),
    so changing PPR there moved nothing and implied it should.
 
@@ -12172,7 +11770,6 @@ function render() {
   renderStartSit();
   renderRankings();
   renderDraftBoard();
-  renderLines();
   renderCatchingBacks();
   renderWaivers();
   /* Only while the tab is open. This one runs the optimiser hundreds of times, and
@@ -12390,8 +11987,6 @@ var ON_CHANGE = {
   wpos:      renderWaivers,
   whorizon:  renderWaivers,
   wsort:     renderWaivers,
-  seasonpos: renderLines,
-  seasonstat: renderLines,
   rankhorizon: renderRankings,
   ranklimit: renderRankings,
   showwhy:   renderRankings,
